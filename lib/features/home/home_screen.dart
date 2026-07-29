@@ -325,11 +325,22 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             )
           : null,
-      body: _selectedPage != null
-          ? _buildPageContent()
-          : _selectedDb != null
-              ? _buildPageList()
-              : _buildDbList(),
+      body: _currentNavIndex == 1
+          ? Scaffold(
+              appBar: AppBar(
+                title: const Text('设置'),
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => setState(() => _currentNavIndex = 0),
+                ),
+              ),
+              body: _buildSettings(),
+            )
+          : _selectedPage != null
+              ? _buildPageContent()
+              : _selectedDb != null
+                  ? _buildPageList()
+                  : _buildDbList(),
       drawer: Drawer(
         child: SafeArea(
           child: Column(
@@ -463,6 +474,34 @@ class _HomeScreenState extends State<HomeScreen> {
                         );
                       },
                     ),
+    );
+  }
+
+  Widget _buildSettings() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Card(
+          child: SwitchListTile(
+            title: const Text('调试日志'),
+            subtitle: const Text('开启后将 API 请求和错误写入设备日志文件'),
+            value: AppLogger.isEnabled,
+            onChanged: (value) async {
+              await AppLogger.setEnabled(value);
+              setState(() {});
+            },
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.article),
+            title: const Text('查看调试日志'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _showDebugLogs,
+          ),
+        ),
+      ],
     );
   }
 
