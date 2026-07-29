@@ -23,6 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Map<String, dynamic>> _pages = [];
   Map<String, dynamic>? _selectedPage;
+  List<dynamic>? _pageBlocks;
   String? _nextCursor;
   bool _hasMore = false;
   final ScrollController _scrollController = ScrollController();
@@ -129,10 +130,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _loadPageContent(String pageId) async {
-    setState(() => _loading = true);
+  Future<void> _loadPageContent(Map<String, dynamic> page) async {
+    setState(() {
+      _selectedPage = page;
+      _pageBlocks = null;
+      _loading = true;
+    });
 
     try {
+      final pageId = page['id'];
       await AppLogger.log('Home', '加载页面内容: $pageId');
 
       final response = await NotionClient.get('/blocks/$pageId/children?page_size=100');
@@ -140,8 +146,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        final blocks = data['results'] as List? ?? [];
+
         setState(() {
-          _selectedPage = data;
+          _pageBlocks = blocks;
           _loading = false;
         });
       } else {
@@ -180,10 +188,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return page['id']?.toString().substring(0, 8) ?? '无标题';
   }
 
-  String _blocksToMarkdown(Map<String, dynamic> data) {
+  String _blocksToMarkdown(List<dynamic> blocks) {
     final buffer = StringBuffer();
-    final results = data['results'] as List? ?? [];
-    for (final block in results) {
+    for (final block in blocks) {
       final type = block['type'] as String? ?? '';
       final content = block[type] as Map<String, dynamic>? ?? {};
       final richText = content['rich_text'] as List? ?? [];
@@ -278,7 +285,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Notion App'),
+        title: Text(_selectedPage != null ? _pageTitle(_selectedPage!) : 'Notion App'),
+        leading: _selectedPage != null
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => setState(() => _selectedPage = null),
+              )
+            : null,
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchPages),
           IconButton(icon: const Icon(Icons.bug_report), onPressed: _showDebugLogs),
@@ -314,6 +327,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildContent() {
+    if (_selectedPage != null) return _buildPageContent();
     if (_currentNavIndex == 1) return _buildSettings();
 
     if (_loading) {
@@ -373,10 +387,24 @@ class _HomeScreenState extends State<HomeScreen> {
             title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: Text('最后编辑: $lastEdited', style: const TextStyle(fontSize: 12)),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => _loadPageContent(page['id']),
+            onTap: () => _loadPageContent(page),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildPageContent() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final markdown = _pageBlocks != null ? _blocksToMarkdown(_pageBlocks!) : '（加载中...）';
+
+    return Markdown(
+      data: markdown,
+      padding: const EdgeInsets.all(24),
+      selectable: true,
     );
   }
 
