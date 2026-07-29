@@ -17,6 +17,14 @@ if (flutterVersionCode == null) {
     flutterVersionCode = "1"
 }
 
+def safeVersionCode
+try {
+    safeVersionCode = flutterVersionCode.toInteger()
+} catch (NumberFormatException e) {
+    def last9 = flutterVersionCode.length() > 9 ? flutterVersionCode[-9..-1] : flutterVersionCode
+    safeVersionCode = last9.toInteger()
+}
+
 def flutterVersionName = localProperties.getProperty("flutter.versionName")
 if (flutterVersionName == null) {
     flutterVersionName = "1.0"
@@ -40,7 +48,7 @@ android {
         applicationId = "com.notion.app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
-        versionCode = flutterVersionCode.toInteger()
+        versionCode = safeVersionCode
         versionName = flutterVersionName
     }
 
