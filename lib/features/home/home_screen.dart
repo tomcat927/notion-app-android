@@ -15,6 +15,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   static final Uri _notionLoginUri = Uri.parse('https://app.notion.com/login');
   static final Uri _notionWorkspaceUri = Uri.parse('https://app.notion.com');
+  static const String _androidChromeUserAgent =
+      'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
 
   late final WebViewController _controller;
   bool _loading = true;
@@ -26,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setUserAgent(_androidChromeUserAgent)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (url) {

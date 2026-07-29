@@ -1,5 +1,5 @@
 name: notion_app
-description: Notion Android App - Android-first, Token login, no AI
+description: Notion Android App - Android-first WebView client, no AI
 version: 0.0.1+1
 publish_to: 'none'
 
@@ -14,8 +14,6 @@ dependencies:
     sdk: flutter
   url_launcher: ^6.3.0
   shared_preferences: ^2.3.0
-  flutter_secure_storage: ^9.2.2
-  http: ^1.2.2
   webview_flutter: ^4.10.0
   path_provider: ^2.1.4
 
