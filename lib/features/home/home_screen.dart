@@ -339,10 +339,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 else
                   IconButton(
                     icon: const Icon(Icons.edit),
-                    onPressed: () => setState(() {
-                      _editing = true;
-                      _initEditors();
-                    }),
+                    onPressed: () {
+                      _controllers.clear();
+                      if (_pageBlocks != null) {
+                        for (final block in _pageBlocks!) {
+                          if (!_isEditable(block)) continue;
+                          _controllers[block['id']] = TextEditingController(text: _blockPlainText(block));
+                        }
+                      }
+                      setState(() => _editing = true);
+                    },
                   ),
               ],
             )
@@ -527,17 +533,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _initEditors() {
-    _controllers.clear();
-    if (_pageBlocks == null) return;
-    for (final block in _pageBlocks!) {
-      if (!_isEditable(block)) continue;
-      final id = block['id'] as String;
-      final text = _blockPlainText(block);
-      _controllers[id] = TextEditingController(text: text);
-    }
-  }
-
   bool _isEditable(dynamic block) {
     final type = block['type'] as String? ?? '';
     return ['paragraph', 'heading_1', 'heading_2', 'heading_3', 'bulleted_list_item', 'numbered_list_item', 'to_do'].contains(type);
@@ -556,6 +551,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _loading = true);
 
     try {
+      await AppLogger.log('Edit', '开始保存编辑');
       for (final block in _pageBlocks!) {
         if (!_isEditable(block)) continue;
         final id = block['id'] as String;
@@ -567,6 +563,7 @@ class _HomeScreenState extends State<HomeScreen> {
           type: {'rich_text': [{'type': 'text', 'text': {'content': controller.text}}]}
         };
 
+        await AppLogger.log('Edit', '更新块 $id: $type -> ${controller.text}');
         await NotionClient.patch('/blocks/$id', body: body);
       }
 
@@ -602,6 +599,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: TextField(
+              autofocus: index == 0,
               controller: _controllers[id],
               decoration: InputDecoration(
                 labelText: _editLabel(type),
