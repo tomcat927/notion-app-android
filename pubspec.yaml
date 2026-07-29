@@ -1,0 +1,31 @@
+name: notion_app
+description: Notion Android App - Android-first, Token login, no AI
+version: 1.0.0+20260729
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  flutter_localizations:
+    sdk: flutter
+  url_launcher: ^6.3.0
+  shared_preferences: ^2.3.0
+  flutter_secure_storage: ^9.2.2
+  http: ^1.2.2
+  flutter_markdown: ^0.7.1
+  path_provider: ^2.1.4
+  device_info_plus: ^11.0.0
+  fluttertoast: ^8.2.8
+  connectivity_plus: ^6.1.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
