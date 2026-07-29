@@ -22,6 +22,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   late final WebViewController _controller;
   bool _loading = true;
+  bool _showUnsupportedBrowser = false;
   int _loadProgress = 0;
 
   @override
@@ -36,11 +37,17 @@ class _HomeScreenState extends State<HomeScreen> {
         NavigationDelegate(
           onPageStarted: (url) {
             AppLogger.log('WebView', '加载: $url');
-            setState(() => _loading = true);
+            setState(() {
+              _loading = !_isUnsupportedBrowserUrl(url);
+              _showUnsupportedBrowser = _isUnsupportedBrowserUrl(url);
+            });
           },
           onPageFinished: (url) {
             AppLogger.log('WebView', '完成: $url');
-            setState(() => _loading = false);
+            setState(() {
+              _loading = false;
+              _showUnsupportedBrowser = _isUnsupportedBrowserUrl(url);
+            });
             _logWebViewDiagnostics();
           },
           onProgress: (progress) => setState(() => _loadProgress = progress),
@@ -48,6 +55,15 @@ class _HomeScreenState extends State<HomeScreen> {
             AppLogger.log('WebView', '错误: ${error.description} (${error.errorCode})');
           },
           onNavigationRequest: (request) {
+            if (_isUnsupportedBrowserUrl(request.url)) {
+              AppLogger.log('WebView', '检测到 Notion 不兼容浏览器页面');
+              setState(() {
+                _loading = false;
+                _showUnsupportedBrowser = true;
+              });
+              return NavigationDecision.prevent;
+            }
+
             final host = Uri.tryParse(request.url)?.host;
             if (_isNotionHost(host)) {
               return NavigationDecision.navigate;
@@ -65,6 +81,11 @@ class _HomeScreenState extends State<HomeScreen> {
         host == 'notion.so' ||
         (host?.endsWith('.notion.com') ?? false) ||
         (host?.endsWith('.notion.so') ?? false);
+  }
+
+  bool _isUnsupportedBrowserUrl(String url) {
+    final uri = Uri.tryParse(url);
+    return _isNotionHost(uri?.host) && uri?.path.endsWith('/unsupported-browser.html') == true;
   }
 
   Future<void> _refresh() async {
@@ -160,6 +181,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   AppLogger.log('WebView', '打开笔记首页');
+                  setState(() => _showUnsupportedBrowser = false);
                   _controller.loadRequest(_notionWorkspaceUri);
                 },
               ),
@@ -171,7 +193,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ListTile(
                 leading: const Icon(Icons.open_in_browser),
                 title: const Text('兼容浏览器打开'),
-                subtitle: const Text('使用 Chrome Custom Tabs 访问 Notion'),
+                subtitle: const Text('使用已安装的兼容浏览器访问 Notion'),
                 onTap: () {
                   Navigator.pop(context);
                   _openNotionInBrowserView();
@@ -193,7 +215,10 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Stack(
         children: [
-          WebViewWidget(controller: _controller),
+          if (_showUnsupportedBrowser)
+            _UnsupportedBrowserView(onOpenBrowser: _openNotionInBrowserView)
+          else
+            WebViewWidget(controller: _controller),
           if (_loading)
             LinearProgressIndicator(value: _loadProgress / 100.0),
         ],
@@ -252,5 +277,43 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     await launchUrl(_notionWorkspaceUri, mode: LaunchMode.externalApplication);
+  }
+}
+
+class _UnsupportedBrowserView extends StatelessWidget {
+  const _UnsupportedBrowserView({required this.onOpenBrowser});
+
+  final VoidCallback onOpenBrowser;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.web_asset_off, size: 56),
+            const SizedBox(height: 16),
+            const Text(
+              '当前系统 WebView 无法打开 Notion',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Notion 已将当前 WebView 跳转到不兼容浏览器页面。请使用兼容浏览器入口继续登录和编辑。',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: onOpenBrowser,
+              icon: const Icon(Icons.open_in_browser),
+              label: const Text('用兼容浏览器打开 Notion'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
