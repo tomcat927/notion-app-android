@@ -1,29 +1,33 @@
 # Notion Android App
 
-轻量、稳定、无 AI 的 Notion Android 客户端，基于 Flutter 构建。
+轻量、稳定、无 AI 的 Notion Android 客户端，基于 Flutter + WebView 构建。
 
 ## 核心特点
-- Token 登录，无需 Notion 账号密码
-- 解决官方 Android App 固定页面跳转问题
+- 使用 Notion 官方网页登录，保留完整编辑能力
+- Notion 域名留在 App 内打开，外部链接跳系统浏览器
 - 移除所有 AI 功能
-- 块级编辑体验
+- 支持 Notion 网页版的富文本、图片、数据库等能力
 
-## 获取 Notion Token
+## 登录方式
 
-推荐使用 **Personal Access Token（推荐）**，直接用你的 Notion 账户权限，无需逐个页面分享：
+App 内置 WebView 加载 Notion 官方登录页：
 
-1. 访问 [Notion Personal Access Tokens](https://www.notion.so/profile/integrations) 页面
-2. 点击 **"新建 Token"**（New token）
-3. 填写名称，勾选所需能力（至少勾选 **Read content**、**Update content**、**Insert content**）
-4. 复制生成的 Token（以 `nup_` 开头）
-5. 粘贴到 App 登录页面即可，你的所有页面都能直接访问
+```text
+https://app.notion.com/login
+```
 
-如果使用 Internal Integration Token（`ntn_` 开头），需要额外在 Notion 页面右上角 `...` → **连接** → 选择集成，比较繁琐。
+用户直接使用 Notion 账号登录。登录态由 WebView Cookie 保存，浏览器里的登录态不会自动同步到 App 内。
+
+## 链接打开规则
+
+- `notion.com`、`notion.so` 及其子域名在 App 内打开
+- 其他外部链接交给 Android 系统浏览器打开
 
 ## 技术栈
 - Flutter (Dart)
-- Notion API
-- flutter_secure_storage（Token 安全存储）
+- webview_flutter
+- url_launcher
+- shared_preferences
 
 ## 快速开始
 
@@ -37,27 +41,26 @@ flutter run
 ## 构建
 
 ```bash
-# APK（分架构）
+# APK
 flutter build apk --release --split-per-abi
-
-# App Bundle
-flutter build appbundle --release
 ```
+
+项目当前只构建 APK，GitHub Actions 会把 APK 直接上传到 GitHub Releases。
 
 ## 版本号
 
-使用中国时区时间（`Asia/Shanghai`）自动生成版本号，格式 `YYYYMMDD`。
+开发测试版本从 `develop` 分支生成 Test Release，正式版本从 `main` 分支生成 Release。
 
 ## 项目结构
 
 ```
 lib/
 ├── app/theme/          # 主题管理
-├── core/               # 核心功能（认证、API 客户端）
+├── core/               # 核心功能（日志等）
 ├── features/           # 功能模块
-│   ├── auth/           # 登录
 │   ├── home/           # 主界面
-│   └── editor/         # 编辑器
+│   ├── logs/           # 调试日志
+│   └── settings/       # 设置
 ├── widgets/            # 自定义组件
 └── main.dart           # 入口
 ```
