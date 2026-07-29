@@ -15,6 +15,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   static final Uri _notionLoginUri = Uri.parse('https://app.notion.com/login');
   static final Uri _notionWorkspaceUri = Uri.parse('https://app.notion.com');
+  static const MethodChannel _browserChannel = MethodChannel('com.notion.app/browser');
   static const String _desktopChromeUserAgent =
       'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -235,14 +236,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openNotionInBrowserView() async {
-    AppLogger.log('WebView', '使用兼容浏览器打开 Notion');
-    final launched = await launchUrl(
-      _notionWorkspaceUri,
-      mode: LaunchMode.inAppBrowserView,
-      browserConfiguration: const BrowserConfiguration(showTitle: true),
-    );
-    if (!launched) {
-      await launchUrl(_notionWorkspaceUri, mode: LaunchMode.externalApplication);
+    AppLogger.log('WebView', '使用兼容浏览器打开 Notion: ${_notionWorkspaceUri.toString()}');
+    try {
+      final opened = await _browserChannel.invokeMethod<bool>(
+        'openInBrowser',
+        {'url': _notionWorkspaceUri.toString()},
+      );
+      if (opened == true) {
+        AppLogger.log('WebView', '已使用首选浏览器打开 Notion');
+        return;
+      }
+      AppLogger.log('WebView', '未找到首选浏览器，回退到系统浏览器');
+    } catch (error) {
+      AppLogger.log('WebView', '首选浏览器打开失败: $error');
     }
+
+    await launchUrl(_notionWorkspaceUri, mode: LaunchMode.externalApplication);
   }
 }
