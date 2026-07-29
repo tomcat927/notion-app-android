@@ -13,6 +13,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static final Uri _notionHomeUri = Uri.parse('https://www.notion.com');
+
   late final WebViewController _controller;
   bool _loading = true;
   int _loadProgress = 0;
@@ -38,8 +40,11 @@ class _HomeScreenState extends State<HomeScreen> {
             AppLogger.log('WebView', '错误: ${error.description} (${error.errorCode})');
           },
           onNavigationRequest: (request) {
-            if (request.url.startsWith('https://www.notion.so/') ||
-                request.url.startsWith('https://notion.so/')) {
+            final host = Uri.tryParse(request.url)?.host;
+            if (host == 'www.notion.so' ||
+                host == 'notion.so' ||
+                host == 'www.notion.com' ||
+                host == 'notion.com') {
               return NavigationDecision.navigate;
             }
             launchUrl(Uri.parse(request.url), mode: LaunchMode.externalApplication);
@@ -47,7 +52,7 @@ class _HomeScreenState extends State<HomeScreen> {
           },
         ),
       )
-      ..loadRequest(Uri.parse('https://www.notion.so'));
+      ..loadRequest(_notionHomeUri);
   }
 
   Future<void> _refresh() async {
@@ -117,10 +122,10 @@ class _HomeScreenState extends State<HomeScreen> {
               const Divider(),
               ListTile(
                 leading: const Icon(Icons.home),
-                title: const Text('首页'),
+                title: const Text('Notion 首页'),
                 onTap: () {
                   Navigator.pop(context);
-                  _controller.loadRequest(Uri.parse('https://www.notion.so'));
+                  _controller.loadRequest(_notionHomeUri);
                 },
               ),
               ListTile(
