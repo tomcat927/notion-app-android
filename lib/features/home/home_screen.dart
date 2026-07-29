@@ -141,6 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(icon: const Icon(Icons.arrow_back), onPressed: _goBack),
           IconButton(icon: const Icon(Icons.arrow_forward), onPressed: _goForward),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
+          IconButton(icon: const Icon(Icons.open_in_browser), onPressed: _openNotionInBrowserView),
         ],
       ),
       drawer: Drawer(
@@ -165,6 +166,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 leading: const Icon(Icons.refresh),
                 title: const Text('刷新'),
                 onTap: () { Navigator.pop(context); _refresh(); },
+              ),
+              ListTile(
+                leading: const Icon(Icons.open_in_browser),
+                title: const Text('兼容浏览器打开'),
+                subtitle: const Text('使用 Chrome Custom Tabs 访问 Notion'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _openNotionInBrowserView();
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.bug_report),
@@ -222,5 +232,17 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _openNotionInBrowserView() async {
+    AppLogger.log('WebView', '使用兼容浏览器打开 Notion');
+    final launched = await launchUrl(
+      _notionWorkspaceUri,
+      mode: LaunchMode.inAppBrowserView,
+      browserConfiguration: const BrowserConfiguration(showTitle: true),
+    );
+    if (!launched) {
+      await launchUrl(_notionWorkspaceUri, mode: LaunchMode.externalApplication);
+    }
   }
 }

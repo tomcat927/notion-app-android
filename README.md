@@ -5,6 +5,7 @@
 ## 核心特点
 - 使用 Notion 官方网页登录，保留完整编辑能力
 - Notion 域名留在 App 内打开，外部链接跳系统浏览器
+- WebView 不兼容时可通过 Chrome Custom Tabs 兼容入口打开
 - 移除所有 AI 功能
 - 支持 Notion 网页版的富文本、图片、数据库等能力
 
@@ -22,6 +23,16 @@ https://app.notion.com/login
 
 - `notion.com`、`notion.so` 及其子域名在 App 内打开
 - 其他外部链接交给 Android 系统浏览器打开
+
+## WebView 兼容性
+
+Notion Web 对浏览器内核要求较高。部分基于系统 WebView 的轻量浏览器或旧版 Android System WebView 会提示：
+
+```text
+Your browser is not compatible with Notion.
+```
+
+App 提供“兼容浏览器打开”入口，使用 Android Custom Tabs 调用设备上的兼容浏览器访问 Notion。
 
 ## 技术栈
 - Flutter (Dart)
