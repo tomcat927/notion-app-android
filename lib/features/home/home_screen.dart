@@ -13,7 +13,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  static final Uri _notionHomeUri = Uri.parse('https://www.notion.com');
+  static final Uri _notionLoginUri = Uri.parse('https://www.notion.com/login');
+  static final Uri _notionWorkspaceUri = Uri.parse('https://www.notion.com');
 
   late final WebViewController _controller;
   bool _loading = true;
@@ -52,7 +53,7 @@ class _HomeScreenState extends State<HomeScreen> {
           },
         ),
       )
-      ..loadRequest(_notionHomeUri);
+      ..loadRequest(_notionLoginUri);
   }
 
   Future<void> _refresh() async {
@@ -122,10 +123,11 @@ class _HomeScreenState extends State<HomeScreen> {
               const Divider(),
               ListTile(
                 leading: const Icon(Icons.home),
-                title: const Text('Notion 首页'),
+                title: const Text('笔记首页'),
                 onTap: () {
                   Navigator.pop(context);
-                  _controller.loadRequest(_notionHomeUri);
+                  AppLogger.log('WebView', '打开笔记首页');
+                  _controller.loadRequest(_notionWorkspaceUri);
                 },
               ),
               ListTile(
