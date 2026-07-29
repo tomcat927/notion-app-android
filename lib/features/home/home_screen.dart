@@ -42,11 +42,7 @@ class _HomeScreenState extends State<HomeScreen> {
           },
           onNavigationRequest: (request) {
             final host = Uri.tryParse(request.url)?.host;
-            if (host == 'www.notion.so' ||
-                host == 'notion.so' ||
-                host == 'www.notion.com' ||
-                host == 'notion.com' ||
-                host == 'app.notion.com') {
+            if (_isNotionHost(host)) {
               return NavigationDecision.navigate;
             }
             launchUrl(Uri.parse(request.url), mode: LaunchMode.externalApplication);
@@ -55,6 +51,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       )
       ..loadRequest(_notionLoginUri);
+  }
+
+  bool _isNotionHost(String? host) {
+    return host == 'notion.com' ||
+        host == 'notion.so' ||
+        (host?.endsWith('.notion.com') ?? false) ||
+        (host?.endsWith('.notion.so') ?? false);
   }
 
   Future<void> _refresh() async {
