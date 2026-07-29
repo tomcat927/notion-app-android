@@ -1,48 +1,49 @@
-name: Release Build
+name: Build & Release
 
 on:
   push:
     branches:
       - develop
       - main
-      - release
   pull_request:
     branches: [develop]
   workflow_dispatch:
 
 env:
   FLUTTER_VERSION: '3.24.0'
-  GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
+  APP_VERSION: '0.0.1'
 
 jobs:
-  version:
+  build:
     runs-on: ubuntu-latest
     outputs:
       version_code: ${{ steps.version.outputs.code }}
+      release_tag: ${{ steps.version.outputs.tag }}
+      is_release: ${{ steps.version.outputs.is_release }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate version from China timezone
+      - name: Generate version info
         id: version
         run: |
-          VERSION=$(TZ='Asia/Shanghai' date +%Y%m%d%H%M%S)
-          echo "code=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          TIMESTAMP=$(TZ='Asia/Shanghai' date +%Y%m%d%H%M%S)
 
-      - name: Update pubspec.yaml version
-        run: |
-          VERSION="${{ steps.version.outputs.code }}"
-          sed -i "s/version: .*/version: 1.0.0+$VERSION/" pubspec.yaml
-          cat pubspec.yaml
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            # Release build
+            TAG="v${{ env.APP_VERSION }}"
+            IS_RELEASE="true"
+          else
+            # Test build (develop / manual)
+            TAG="test-v${{ env.APP_VERSION }}-$TIMESTAMP"
+            IS_RELEASE="false"
+          fi
 
-  build:
-    needs: version
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+          echo "code=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
+          echo "Release tag: $TAG"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -60,15 +61,25 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build APK
+      - name: Update version
         run: |
-          VERSION="${{ needs.version.outputs.version_code }}"
-          sed -i "s/version: .*/version: 1.0.0+$VERSION/" pubspec.yaml
-          flutter build apk --release
+          sed -i "s/version: .*/version: 0.0.1+${{ steps.version.outputs.code }}/" pubspec.yaml
+          cat pubspec.yaml
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Rename APK
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk "notion-app-${{ steps.version.outputs.tag }}.apk"
+
+      - name: Create Release & Upload APK
+        uses: softprops/action-gh-release@v2
         with:
-          name: notion-app-${{ needs.version.outputs.version_code }}
-          path: build/app/outputs/flutter-apk/app-release.apk
-          retention-days: 14
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.is_release == 'true' && format('v{0}', env.APP_VERSION) || format('Test v{0} ({1})', env.APP_VERSION, steps.version.outputs.code) }}
+          prerelease: ${{ steps.version.outputs.is_release != 'true' }}
+          files: notion-app-${{ steps.version.outputs.tag }}.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
