@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 import '../../core/notion_auth.dart';
@@ -192,6 +193,18 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         actions: [
+          TextButton(
+            onPressed: () async {
+              await AppLogger.clearLogs();
+              if (ctx.mounted) Navigator.pop(ctx);
+              setState(() {});
+            },
+            child: const Text('清空'),
+          ),
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: logs)),
+            child: const Text('复制'),
+          ),
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
         ],
       ),
