@@ -13,8 +13,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  static final Uri _notionLoginUri = Uri.parse('https://www.notion.com/login');
-  static final Uri _notionWorkspaceUri = Uri.parse('https://www.notion.com');
+  static final Uri _notionLoginUri = Uri.parse('https://app.notion.com/login');
+  static final Uri _notionWorkspaceUri = Uri.parse('https://app.notion.com');
 
   late final WebViewController _controller;
   bool _loading = true;
@@ -45,7 +45,8 @@ class _HomeScreenState extends State<HomeScreen> {
             if (host == 'www.notion.so' ||
                 host == 'notion.so' ||
                 host == 'www.notion.com' ||
-                host == 'notion.com') {
+                host == 'notion.com' ||
+                host == 'app.notion.com') {
               return NavigationDecision.navigate;
             }
             launchUrl(Uri.parse(request.url), mode: LaunchMode.externalApplication);
