@@ -29,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<dynamic>? _pageBlocks;
   bool _editing = false;
   final Map<String, TextEditingController> _controllers = {};
+  final FocusNode _editFocus = FocusNode();
   String? _nextCursor;
   bool _hasMore = false;
   String _titleProperty = 'Name';
@@ -321,10 +322,13 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: _selectedPage != null
           ? AppBar(
               title: Text(_pageTitle(_selectedPage!)),
-              leading: _editing
+              leading                  : _editing
                   ? IconButton(
                       icon: const Icon(Icons.close),
-                      onPressed: () => setState(() { _editing = false; _loadPageContent(_selectedPage!); }),
+                      onPressed: () {
+                        AppLogger.log('Edit', '取消编辑');
+                        setState(() { _editing = false; _loadPageContent(_selectedPage!); });
+                      },
                     )
                   : IconButton(
                       icon: const Icon(Icons.arrow_back),
@@ -348,6 +352,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         }
                       }
                       setState(() => _editing = true);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _editFocus.requestFocus();
+                      });
+                      AppLogger.log('Edit', '进入编辑模式, ${_controllers.length} 个可编辑块');
                     },
                   ),
               ],
@@ -551,23 +559,33 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _loading = true);
 
     try {
-      await AppLogger.log('Edit', '开始保存编辑');
+      await AppLogger.log('Edit', '开始保存 ${_controllers.length} 个块');
+      int saved = 0;
+      int changed = 0;
       for (final block in _pageBlocks!) {
         if (!_isEditable(block)) continue;
         final id = block['id'] as String;
         final controller = _controllers[id];
         if (controller == null) continue;
 
+        final original = _blockPlainText(block);
+        if (controller.text == original) continue;
+
+        changed++;
         final type = block['type'] as String;
         final body = {
           type: {'rich_text': [{'type': 'text', 'text': {'content': controller.text}}]}
         };
 
-        await AppLogger.log('Edit', '更新块 $id: $type -> ${controller.text}');
-        await NotionClient.patch('/blocks/$id', body: body);
+        final response = await NotionClient.patch('/blocks/$id', body: body);
+        if (response.statusCode == 200) {
+          saved++;
+        } else {
+          await AppLogger.log('Edit', '保存块 $id 失败: ${response.statusCode}');
+        }
       }
 
-      await AppLogger.log('Home', '保存编辑完成');
+      await AppLogger.log('Edit', '完成: 修改 $changed 个块, 成功保存 $saved 个');
 
       setState(() { _editing = false; });
       await _loadPageContent(_selectedPage!);
@@ -600,6 +618,7 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: TextField(
               autofocus: index == 0,
+              focusNode: index == 0 ? _editFocus : null,
               controller: _controllers[id],
               decoration: InputDecoration(
                 labelText: _editLabel(type),
