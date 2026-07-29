@@ -4,9 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:notion_app/app/theme/app_theme.dart';
 import 'package:notion_app/features/home/home_screen.dart';
-import 'package:notion_app/features/auth/login_screen.dart';
-import 'package:notion_app/core/notion_auth.dart';
-
 import 'package:notion_app/core/app_logger.dart';
 
 void main() async {
@@ -14,16 +11,11 @@ void main() async {
   await SharedPreferences.getInstance();
   await AppLogger.init();
 
-  final token = await NotionAuth.getToken();
-  final hasToken = token != null && token.isNotEmpty;
-
-  runApp(NotionApp(isLoggedIn: hasToken));
+  runApp(const NotionApp());
 }
 
 class NotionApp extends StatelessWidget {
-  final bool isLoggedIn;
-
-  const NotionApp({super.key, required this.isLoggedIn});
+  const NotionApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -39,7 +31,7 @@ class NotionApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: isLoggedIn ? const HomeScreen() : const LoginScreen(),
+      home: const HomeScreen(),
     );
   }
 }
