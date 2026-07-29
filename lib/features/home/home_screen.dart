@@ -21,17 +21,21 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loadingMore = false;
   String? _error;
 
+  List<Map<String, dynamic>> _databases = [];
+  Map<String, dynamic>? _selectedDb;
+
   List<Map<String, dynamic>> _pages = [];
   Map<String, dynamic>? _selectedPage;
   List<dynamic>? _pageBlocks;
   String? _nextCursor;
   bool _hasMore = false;
+  String _titleProperty = 'Name';
   final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _fetchPages();
+    _fetchDatabases();
     _scrollController.addListener(_onScroll);
   }
 
@@ -43,132 +47,180 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onScroll() {
     if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
-      if (_hasMore && !_loadingMore) {
+      if (_hasMore && !_loadingMore && _selectedDb != null) {
         _fetchMorePages();
       }
     }
   }
 
-  Future<void> _fetchPages() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
+  Future<void> _fetchDatabases() async {
+    setState(() => _loading = true);
     try {
-      await AppLogger.log('Home', '开始获取页面列表（首页）');
-
       final response = await NotionClient.post('/search', body: {
-        'filter': {'property': 'object', 'value': 'page'},
-        'sort': {'direction': 'descending', 'timestamp': 'last_edited_time'},
-        'page_size': 50,
+        'filter': {'property': 'object', 'value': 'database'},
+        'page_size': 100,
       });
 
-      await AppLogger.log('Home', 'API 响应状态: ${response.statusCode}');
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final dbs = List<Map<String, dynamic>>.from(data['results'] ?? []);
+
+        setState(() {
+          _databases = dbs;
+          _loading = false;
+        });
+
+        if (dbs.isNotEmpty) {
+          _selectDatabase(dbs.first);
+        }
+      }
+    } catch (e) {
+      await AppLogger.log('Home', '获取数据库失败: $e');
+      if (_handleTokenExpired(e)) return;
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _selectDatabase(Map<String, dynamic> db) async {
+    setState(() {
+      _selectedDb = db;
+      _pages = [];
+      _pageBlocks = null;
+      _selectedPage = null;
+    });
+
+    final titleProp = _findTitleProperty(db);
+    _titleProperty = titleProp;
+
+    await _fetchPages(db['id']);
+  }
+
+  String _findTitleProperty(Map<String, dynamic> db) {
+    final props = db['properties'] as Map<String, dynamic>? ?? {};
+    for (final entry in props.entries) {
+      if ((entry.value as Map)['type'] == 'title') {
+        return entry.key;
+      }
+    }
+    return 'Name';
+  }
+
+  Future<void> _fetchPages(String dbId, {String? cursor}) async {
+    setState(() { _loading = true; _error = null; });
+
+    try {
+      final body = <String, dynamic>{
+        'sorts': [{'timestamp': 'last_edited_time', 'direction': 'descending'}],
+        'page_size': 50,
+      };
+      if (cursor != null) body['start_cursor'] = cursor;
+
+      final response = await NotionClient.post('/databases/$dbId/query', body: body);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-        await AppLogger.log('Home', '获取到 ${results.length} 个页面, has_more: ${data['has_more']}');
 
-        setState(() {
-          _pages = results;
-          _nextCursor = data['next_cursor'];
-          _hasMore = data['has_more'] == true;
-          _loading = false;
-        });
-      } else {
-        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+        if (cursor == null) {
+          setState(() {
+            _pages = results;
+            _nextCursor = data['next_cursor'];
+            _hasMore = data['has_more'] == true;
+            _loading = false;
+          });
+        } else {
+          setState(() {
+            _pages.addAll(results);
+            _nextCursor = data['next_cursor'];
+            _hasMore = data['has_more'] == true;
+            _loadingMore = false;
+          });
+        }
       }
     } catch (e) {
       await AppLogger.log('Home', '获取页面失败: $e');
-      if (e is TokenExpiredException && mounted) {
-        await NotionAuth.removeToken();
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (_) => false,
-        );
-        return;
-      }
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+      if (_handleTokenExpired(e)) return;
+      setState(() { _error = e.toString(); _loading = false; });
     }
   }
 
   Future<void> _fetchMorePages() async {
-    if (_nextCursor == null) return;
-
+    if (_nextCursor == null || _selectedDb == null) return;
     setState(() => _loadingMore = true);
+    await _fetchPages(_selectedDb!['id'], cursor: _nextCursor);
+  }
+
+  bool _handleTokenExpired(Object e) {
+    if (e is TokenExpiredException && mounted) {
+      NotionAuth.removeToken();
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (_) => false,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _createPage() async {
+    if (_selectedDb == null) return;
+
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('新建页面'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '页面标题', border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('创建')),
+        ],
+      ),
+    );
+
+    if (result == null || result.trim().isEmpty) return;
 
     try {
-      await AppLogger.log('Home', '加载更多页面: cursor=$_nextCursor');
+      final body = {
+        'parent': {'database_id': _selectedDb!['id']},
+        'properties': {
+          _titleProperty: {
+            'title': [{'text': {'content': result.trim()}}]
+          }
+        }
+      };
 
-      final response = await NotionClient.post('/search', body: {
-        'filter': {'property': 'object', 'value': 'page'},
-        'sort': {'direction': 'descending', 'timestamp': 'last_edited_time'},
-        'start_cursor': _nextCursor,
-        'page_size': 50,
-      });
-
+      final response = await NotionClient.post('/pages', body: body);
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-        await AppLogger.log('Home', '追加 ${results.length} 个页面');
-
-        setState(() {
-          _pages.addAll(results);
-          _nextCursor = data['next_cursor'];
-          _hasMore = data['has_more'] == true;
-          _loadingMore = false;
-        });
+        _fetchPages(_selectedDb!['id']);
       }
     } catch (e) {
-      await AppLogger.log('Home', '加载更多失败: $e');
-      setState(() => _loadingMore = false);
+      await AppLogger.log('Home', '创建页面失败: $e');
     }
   }
 
   Future<void> _loadPageContent(Map<String, dynamic> page) async {
-    setState(() {
-      _selectedPage = page;
-      _pageBlocks = null;
-      _loading = true;
-    });
+    setState(() { _selectedPage = page; _pageBlocks = null; _loading = true; });
 
     try {
       final pageId = page['id'];
-      await AppLogger.log('Home', '加载页面内容: $pageId');
-
       final response = await NotionClient.get('/blocks/$pageId/children?page_size=100');
-      await AppLogger.log('Home', '页面内容响应: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final blocks = data['results'] as List? ?? [];
-
         setState(() {
-          _pageBlocks = blocks;
+          _pageBlocks = data['results'] as List? ?? [];
           _loading = false;
         });
-      } else {
-        throw Exception('HTTP ${response.statusCode}');
       }
     } catch (e) {
-      await AppLogger.log('Home', '加载页面内容失败: $e');
-      if (e is TokenExpiredException && mounted) {
-        await NotionAuth.removeToken();
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (_) => false,
-        );
-        return;
-      }
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+      await AppLogger.log('Home', '加载内容失败: $e');
+      if (_handleTokenExpired(e)) return;
+      setState(() { _error = e.toString(); _loading = false; });
     }
   }
 
@@ -185,7 +237,15 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     } catch (_) {}
-    return page['id']?.toString().substring(0, 8) ?? '无标题';
+    return '无标题';
+  }
+
+  String _dbTitle(Map<String, dynamic> db) {
+    try {
+      final title = db['title'] as List? ?? [];
+      return title.map((t) => t['plain_text'] ?? '').join('');
+    } catch (_) {}
+    return '数据库';
   }
 
   String _blocksToMarkdown(List<dynamic> blocks) {
@@ -196,47 +256,23 @@ class _HomeScreenState extends State<HomeScreen> {
       final richText = content['rich_text'] as List? ?? [];
 
       switch (type) {
-        case 'heading_1':
-          buffer.writeln('# ${_richTextToPlain(richText)}');
-          break;
-        case 'heading_2':
-          buffer.writeln('## ${_richTextToPlain(richText)}');
-          break;
-        case 'heading_3':
-          buffer.writeln('### ${_richTextToPlain(richText)}');
-          break;
-        case 'paragraph':
-          buffer.writeln(_richTextToPlain(richText));
-          break;
-        case 'bulleted_list_item':
-          buffer.writeln('- ${_richTextToPlain(richText)}');
-          break;
-        case 'numbered_list_item':
-          buffer.writeln('1. ${_richTextToPlain(richText)}');
-          break;
-        case 'to_do':
-          final checked = content['checked'] == true;
-          buffer.writeln('- [${checked ? 'x' : ' '}] ${_richTextToPlain(richText)}');
-          break;
-        case 'code':
-          buffer.writeln('```');
-          buffer.writeln(_richTextToPlain(richText));
-          buffer.writeln('```');
-          break;
-        case 'divider':
-          buffer.writeln('---');
-          break;
-        default:
-          buffer.writeln(_richTextToPlain(richText));
+        case 'heading_1': buffer.writeln('# ${_plain(richText)}'); break;
+        case 'heading_2': buffer.writeln('## ${_plain(richText)}'); break;
+        case 'heading_3': buffer.writeln('### ${_plain(richText)}'); break;
+        case 'paragraph': buffer.writeln(_plain(richText)); break;
+        case 'bulleted_list_item': buffer.writeln('- ${_plain(richText)}'); break;
+        case 'numbered_list_item': buffer.writeln('1. ${_plain(richText)}'); break;
+        case 'to_do': buffer.writeln('- [${content['checked'] == true ? 'x' : ' '}] ${_plain(richText)}'); break;
+        case 'code': buffer.writeln('```\n${_plain(richText)}\n```'); break;
+        case 'divider': buffer.writeln('---'); break;
+        default: buffer.writeln(_plain(richText));
       }
       buffer.writeln();
     }
     return buffer.toString().isEmpty ? '（空页面）' : buffer.toString();
   }
 
-  String _richTextToPlain(List richText) {
-    return richText.map((t) => t['plain_text'] ?? '').join('');
-  }
+  String _plain(List richText) => richText.map((t) => t['plain_text'] ?? '').join('');
 
   Future<void> _showDebugLogs() async {
     final logs = await AppLogger.readLogs();
@@ -254,11 +290,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () async {
-              await AppLogger.clearLogs();
-              if (ctx.mounted) Navigator.pop(ctx);
-              setState(() {});
-            },
+            onPressed: () async { await AppLogger.clearLogs(); if (ctx.mounted) Navigator.pop(ctx); setState(() {}); },
             child: const Text('清空'),
           ),
           TextButton(
@@ -284,155 +316,159 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_selectedPage != null ? _pageTitle(_selectedPage!) : 'Notion App'),
-        leading: _selectedPage != null
-            ? IconButton(
+      appBar: _selectedPage != null
+          ? AppBar(
+              title: Text(_pageTitle(_selectedPage!)),
+              leading: IconButton(
                 icon: const Icon(Icons.arrow_back),
                 onPressed: () => setState(() => _selectedPage = null),
-              )
-            : null,
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchPages),
-          IconButton(icon: const Icon(Icons.bug_report), onPressed: _showDebugLogs),
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              if (value == 'logout') _logout();
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'logout', child: Text('退出登录')),
+              ),
+            )
+          : null,
+      body: _selectedPage != null
+          ? _buildPageContent()
+          : _selectedDb != null
+              ? _buildPageList()
+              : _buildDbList(),
+      drawer: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('数据库', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+              ),
+              Expanded(
+                child: _loading && _databases.isEmpty
+                    ? const Center(child: CircularProgressIndicator())
+                    : ListView.builder(
+                        itemCount: _databases.length,
+                        itemBuilder: (context, index) {
+                          final db = _databases[index];
+                          final isSelected = _selectedDb?['id'] == db['id'];
+                          return ListTile(
+                            title: Text(_dbTitle(db), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            selected: isSelected,
+                            selectedTileColor: Theme.of(context).colorScheme.primaryContainer,
+                            onTap: () {
+                              Navigator.pop(context);
+                              _selectDatabase(db);
+                            },
+                          );
+                        },
+                      ),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.settings),
+                title: const Text('设置'),
+                onTap: () {
+                  Navigator.pop(context);
+                  setState(() => _currentNavIndex = 1);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.bug_report),
+                title: const Text('调试日志'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showDebugLogs();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.logout),
+                title: const Text('退出登录'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _logout();
+                },
+              ),
             ],
           ),
-        ],
-      ),
-      body: Row(
-        children: [
-          NavigationRail(
-            selectedIndex: _currentNavIndex,
-            onDestinationSelected: (index) {
-              setState(() => _currentNavIndex = index);
-              if (index == 0) _fetchPages();
-            },
-            labelType: NavigationRailLabelType.all,
-            destinations: const [
-              NavigationRailDestination(icon: Icon(Icons.article_outlined), selectedIcon: Icon(Icons.article), label: Text('页面')),
-              NavigationRailDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: Text('设置')),
-            ],
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(child: _buildContent()),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildContent() {
-    if (_selectedPage != null) return _buildPageContent();
-    if (_currentNavIndex == 1) return _buildSettings();
-
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.red),
-            const SizedBox(height: 16),
-            Text('加载失败', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(_error!, style: const TextStyle(color: Colors.grey)),
-            const SizedBox(height: 16),
-            FilledButton(onPressed: _fetchPages, child: const Text('重试')),
-          ],
+  Widget _buildDbList() {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Text('从左侧选择数据库', style: TextStyle(color: Colors.grey)),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          icon: const Icon(Icons.refresh),
+          label: const Text('刷新'),
+          onPressed: _fetchDatabases,
         ),
-      );
-    }
+      ]),
+    );
+  }
 
-    if (_pages.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
-            const SizedBox(height: 16),
-            const Text('没有找到页面'),
-            const SizedBox(height: 8),
-            const Text('请确保集成已关联到你的 Notion 页面', style: TextStyle(color: Colors.grey, fontSize: 12)),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(16),
-      itemCount: _pages.length + (_hasMore || _loadingMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index >= _pages.length) {
-          return const Padding(
-            padding: EdgeInsets.all(16),
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        final page = _pages[index];
-        final title = _pageTitle(page);
-        final lastEdited = page['last_edited_time']?.toString() ?? '';
-
-        return Card(
-          child: ListTile(
-            title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: Text('最后编辑: $lastEdited', style: const TextStyle(fontSize: 12)),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => _loadPageContent(page),
+  Widget _buildPageList() {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_dbTitle(_selectedDb!)),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: () => _fetchPages(_selectedDb!['id'])),
+          IconButton(icon: const Icon(Icons.bug_report), onPressed: _showDebugLogs),
+          PopupMenuButton<String>(
+            onSelected: (v) { if (v == 'logout') _logout(); },
+            itemBuilder: (_) => [const PopupMenuItem(value: 'logout', child: Text('退出登录'))],
           ),
-        );
-      },
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _createPage,
+        child: const Icon(Icons.add),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                  const SizedBox(height: 16),
+                  Text(_error!, style: const TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 16),
+                  FilledButton(onPressed: () => _fetchPages(_selectedDb!['id']), child: const Text('重试')),
+                ]))
+              : _pages.isEmpty
+                  ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
+                      const SizedBox(height: 16),
+                      const Text('该数据库暂无页面'),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.add),
+                        label: const Text('创建第一个页面'),
+                        onPressed: _createPage,
+                      ),
+                    ]))
+                  : ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _pages.length + (_hasMore || _loadingMore ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (index >= _pages.length) {
+                          return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
+                        }
+                        final page = _pages[index];
+                        return Card(
+                          child: ListTile(
+                            title: Text(_pageTitle(page), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            subtitle: Text(page['last_edited_time']?.toString() ?? '', style: const TextStyle(fontSize: 12)),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => _loadPageContent(page),
+                          ),
+                        );
+                      },
+                    ),
     );
   }
 
   Widget _buildPageContent() {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final markdown = _pageBlocks != null ? _blocksToMarkdown(_pageBlocks!) : '（加载中...）';
-
-    return Markdown(
-      data: markdown,
-      padding: const EdgeInsets.all(24),
-      selectable: true,
-    );
-  }
-
-  Widget _buildSettings() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: SwitchListTile(
-            title: const Text('调试日志'),
-            subtitle: const Text('开启后将 API 请求和错误写入设备日志文件'),
-            value: AppLogger.isEnabled,
-            onChanged: (value) async {
-              await AppLogger.setEnabled(value);
-              setState(() {});
-            },
-          ),
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: ListTile(
-            leading: const Icon(Icons.article),
-            title: const Text('查看调试日志'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _showDebugLogs,
-          ),
-        ),
-      ],
-    );
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    final markdown = _pageBlocks != null ? _blocksToMarkdown(_pageBlocks!) : '';
+    return Markdown(data: markdown, padding: const EdgeInsets.all(24), selectable: true);
   }
 }
