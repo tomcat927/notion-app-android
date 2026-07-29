@@ -60,6 +60,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       await AppLogger.log('Home', '获取页面失败: $e');
+      if (e is TokenExpiredException && mounted) {
+        await NotionAuth.removeToken();
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (_) => false,
+        );
+        return;
+      }
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -87,6 +95,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       await AppLogger.log('Home', '加载页面内容失败: $e');
+      if (e is TokenExpiredException && mounted) {
+        await NotionAuth.removeToken();
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (_) => false,
+        );
+        return;
+      }
       setState(() {
         _error = e.toString();
         _loading = false;
