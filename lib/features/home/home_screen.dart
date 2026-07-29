@@ -15,9 +15,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   static final Uri _notionLoginUri = Uri.parse('https://app.notion.com/login');
   static final Uri _notionWorkspaceUri = Uri.parse('https://app.notion.com');
-  static const String _androidChromeUserAgent =
-      'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+  static const String _desktopChromeUserAgent =
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
   late final WebViewController _controller;
   bool _loading = true;
@@ -29,7 +29,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setUserAgent(_androidChromeUserAgent)
+      ..setUserAgent(_desktopChromeUserAgent)
+      ..enableZoom(true)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (url) {
@@ -39,6 +40,7 @@ class _HomeScreenState extends State<HomeScreen> {
           onPageFinished: (url) {
             AppLogger.log('WebView', '完成: $url');
             setState(() => _loading = false);
+            _logWebViewDiagnostics();
           },
           onProgress: (progress) => setState(() => _loadProgress = progress),
           onWebResourceError: (error) {
@@ -66,6 +68,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _refresh() async {
     _controller.reload();
+  }
+
+  Future<void> _logWebViewDiagnostics() async {
+    try {
+      final diagnostics = await _controller.runJavaScriptReturningResult('''
+        JSON.stringify({
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          cookieEnabled: navigator.cookieEnabled,
+          localStorage: typeof localStorage !== 'undefined',
+          indexedDB: typeof indexedDB !== 'undefined',
+          serviceWorker: 'serviceWorker' in navigator,
+          webAssembly: typeof WebAssembly !== 'undefined',
+          crypto: !!(window.crypto && window.crypto.subtle),
+          crossOriginIsolated: window.crossOriginIsolated === true
+        })
+      ''');
+      AppLogger.log('WebView', '诊断: $diagnostics');
+    } catch (error) {
+      AppLogger.log('WebView', '诊断失败: $error');
+    }
   }
 
   Future<void> _goBack() async {
