@@ -10,12 +10,15 @@
 
 ## 获取 Notion Token
 
-1. 访问 [Notion Integrations](https://www.notion.so/my-integrations) 页面
-2. 点击 **"新建集成"**（New integration）
-3. 填写名称（如 "Notion App"），选择关联的工作区
-4. 创建后在 **"Secrets"** 区域复制 **Internal Integration Secret**（以 `ntn_` 或 `secret_` 开头）
-5. 进入你需要操作的 Notion 页面，点击右上角 `...` → **连接** → 选择刚创建的集成
-6. 将 Token 粘贴到 App 登录页面即可
+推荐使用 **Personal Access Token（推荐）**，直接用你的 Notion 账户权限，无需逐个页面分享：
+
+1. 访问 [Notion Personal Access Tokens](https://www.notion.so/profile/integrations) 页面
+2. 点击 **"新建 Token"**（New token）
+3. 填写名称，勾选所需能力（至少勾选 **Read content**、**Update content**、**Insert content**）
+4. 复制生成的 Token（以 `nup_` 开头）
+5. 粘贴到 App 登录页面即可，你的所有页面都能直接访问
+
+如果使用 Internal Integration Token（`ntn_` 开头），需要额外在 Notion 页面右上角 `...` → **连接** → 选择集成，比较繁琐。
 
 ## 技术栈
 - Flutter (Dart)
