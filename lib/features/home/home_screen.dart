@@ -27,6 +27,8 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _pages = [];
   Map<String, dynamic>? _selectedPage;
   List<dynamic>? _pageBlocks;
+  bool _editing = false;
+  final Map<String, TextEditingController> _controllers = {};
   String? _nextCursor;
   bool _hasMore = false;
   String _titleProperty = 'Name';
@@ -319,10 +321,30 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: _selectedPage != null
           ? AppBar(
               title: Text(_pageTitle(_selectedPage!)),
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => setState(() => _selectedPage = null),
-              ),
+              leading: _editing
+                  ? IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => setState(() { _editing = false; _loadPageContent(_selectedPage!); }),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => setState(() => _selectedPage = null),
+                    ),
+              actions: [
+                if (_editing)
+                  IconButton(
+                    icon: const Icon(Icons.check),
+                    onPressed: _saveEdits,
+                  )
+                else
+                  IconButton(
+                    icon: const Icon(Icons.edit),
+                    onPressed: () => setState(() {
+                      _editing = true;
+                      _initEditors();
+                    }),
+                  ),
+              ],
             )
           : null,
       body: _currentNavIndex == 1
@@ -505,9 +527,112 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _initEditors() {
+    _controllers.clear();
+    if (_pageBlocks == null) return;
+    for (final block in _pageBlocks!) {
+      if (!_isEditable(block)) continue;
+      final id = block['id'] as String;
+      final text = _blockPlainText(block);
+      _controllers[id] = TextEditingController(text: text);
+    }
+  }
+
+  bool _isEditable(dynamic block) {
+    final type = block['type'] as String? ?? '';
+    return ['paragraph', 'heading_1', 'heading_2', 'heading_3', 'bulleted_list_item', 'numbered_list_item', 'to_do'].contains(type);
+  }
+
+  String _blockPlainText(dynamic block) {
+    final type = block['type'] as String? ?? '';
+    final content = block[type] as Map<String, dynamic>? ?? {};
+    final richText = content['rich_text'] as List? ?? [];
+    return richText.map((t) => t['plain_text'] ?? '').join('');
+  }
+
+  Future<void> _saveEdits() async {
+    if (_pageBlocks == null) return;
+
+    setState(() => _loading = true);
+
+    try {
+      for (final block in _pageBlocks!) {
+        if (!_isEditable(block)) continue;
+        final id = block['id'] as String;
+        final controller = _controllers[id];
+        if (controller == null) continue;
+
+        final type = block['type'] as String;
+        final body = {
+          type: {'rich_text': [{'type': 'text', 'text': {'content': controller.text}}]}
+        };
+
+        await NotionClient.patch('/blocks/$id', body: body);
+      }
+
+      await AppLogger.log('Home', '保存编辑完成');
+
+      setState(() { _editing = false; });
+      await _loadPageContent(_selectedPage!);
+    } catch (e) {
+      await AppLogger.log('Home', '保存编辑失败: $e');
+      setState(() => _loading = false);
+    }
+  }
+
   Widget _buildPageContent() {
     if (_loading) return const Center(child: CircularProgressIndicator());
+
+    if (_editing && _pageBlocks != null) {
+      return ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: _pageBlocks!.length,
+        itemBuilder: (context, index) {
+          final block = _pageBlocks![index];
+          final type = block['type'] as String? ?? 'paragraph';
+          final id = block['id'] as String;
+
+          if (!_isEditable(block)) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(type, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+            );
+          }
+
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: TextField(
+              controller: _controllers[id],
+              decoration: InputDecoration(
+                labelText: _editLabel(type),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+              maxLines: type.startsWith('heading') ? 1 : null,
+              style: TextStyle(
+                fontSize: type == 'heading_1' ? 24 : type == 'heading_2' ? 20 : type == 'heading_3' ? 16 : 14,
+                fontWeight: type.startsWith('heading') ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          );
+        },
+      );
+    }
+
     final markdown = _pageBlocks != null ? _blocksToMarkdown(_pageBlocks!) : '';
     return Markdown(data: markdown, padding: const EdgeInsets.all(24), selectable: true);
+  }
+
+  String _editLabel(String type) {
+    switch (type) {
+      case 'heading_1': return '标题1';
+      case 'heading_2': return '标题2';
+      case 'heading_3': return '标题3';
+      case 'paragraph': return '段落';
+      case 'bulleted_list_item': return '列表';
+      case 'numbered_list_item': return '编号';
+      case 'to_do': return '待办';
+      default: return type;
+    }
   }
 }
