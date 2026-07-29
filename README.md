@@ -8,6 +8,15 @@
 - 移除所有 AI 功能
 - 块级编辑体验
 
+## 获取 Notion Token
+
+1. 访问 [Notion Integrations](https://www.notion.so/my-integrations) 页面
+2. 点击 **"新建集成"**（New integration）
+3. 填写名称（如 "Notion App"），选择关联的工作区
+4. 创建后在 **"Secrets"** 区域复制 **Internal Integration Secret**（以 `ntn_` 或 `secret_` 开头）
+5. 进入你需要操作的 Notion 页面，点击右上角 `...` → **连接** → 选择刚创建的集成
+6. 将 Token 粘贴到 App 登录页面即可
+
 ## 技术栈
 - Flutter (Dart)
 - Notion API
