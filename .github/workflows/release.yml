@@ -26,7 +26,7 @@ jobs:
       - name: Generate version from China timezone
         id: version
         run: |
-          VERSION=$(TZ='Asia/Shanghai' date +%Y%m%d)
+          VERSION=$(TZ='Asia/Shanghai' date +%Y%m%d%H%M%S)
           echo "code=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
