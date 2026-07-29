@@ -7,9 +7,12 @@ import 'package:notion_app/features/home/home_screen.dart';
 import 'package:notion_app/features/auth/login_screen.dart';
 import 'package:notion_app/core/notion_auth.dart';
 
+import 'package:notion_app/core/app_logger.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SharedPreferences.getInstance();
+  await AppLogger.init();
 
   final token = await NotionAuth.getToken();
   final hasToken = token != null && token.isNotEmpty;

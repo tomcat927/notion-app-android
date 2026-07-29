@@ -1,7 +1,10 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 import '../../core/notion_auth.dart';
+import '../../core/notion_client.dart';
+import '../../core/app_logger.dart';
 import '../auth/login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -12,9 +15,172 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String _currentTitle = '主页';
-  String _currentContent = '# 欢迎使用 Notion App\n\n请选择左侧菜单或底部导航栏开始使用。';
   int _currentNavIndex = 0;
+  bool _loading = true;
+  String? _error;
+
+  List<Map<String, dynamic>> _pages = [];
+  Map<String, dynamic>? _selectedPage;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchPages();
+  }
+
+  Future<void> _fetchPages() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      await AppLogger.log('Home', '开始获取页面列表');
+
+      final response = await NotionClient.post('/search', body: {
+        'filter': {'property': 'object', 'value': 'page'},
+        'sort': {'direction': 'descending', 'timestamp': 'last_edited_time'},
+        'page_size': 50,
+      });
+
+      await AppLogger.log('Home', 'API 响应状态: ${response.statusCode}');
+      await AppLogger.log('Home', '响应体: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+        await AppLogger.log('Home', '获取到 ${results.length} 个页面');
+
+        setState(() {
+          _pages = results;
+          _loading = false;
+        });
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+    } catch (e) {
+      await AppLogger.log('Home', '获取页面失败: $e');
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadPageContent(String pageId) async {
+    setState(() => _loading = true);
+
+    try {
+      await AppLogger.log('Home', '加载页面内容: $pageId');
+
+      final response = await NotionClient.get('/blocks/$pageId/children?page_size=100');
+      await AppLogger.log('Home', '页面内容响应: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          _selectedPage = data;
+          _loading = false;
+        });
+      } else {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+    } catch (e) {
+      await AppLogger.log('Home', '加载页面内容失败: $e');
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  String _pageTitle(Map<String, dynamic> page) {
+    try {
+      final props = page['properties'] as Map<String, dynamic>? ?? {};
+      for (final entry in props.entries) {
+        final value = entry.value as Map<String, dynamic>?;
+        if (value?['type'] == 'title') {
+          final titleList = value?['title'] as List? ?? [];
+          if (titleList.isNotEmpty) {
+            return titleList.map((t) => t['plain_text'] ?? '').join('');
+          }
+        }
+      }
+    } catch (_) {}
+    return page['id']?.toString().substring(0, 8) ?? '无标题';
+  }
+
+  String _blocksToMarkdown(Map<String, dynamic> data) {
+    final buffer = StringBuffer();
+    final results = data['results'] as List? ?? [];
+    for (final block in results) {
+      final type = block['type'] as String? ?? '';
+      final content = block[type] as Map<String, dynamic>? ?? {};
+      final richText = content['rich_text'] as List? ?? [];
+
+      switch (type) {
+        case 'heading_1':
+          buffer.writeln('# ${_richTextToPlain(richText)}');
+          break;
+        case 'heading_2':
+          buffer.writeln('## ${_richTextToPlain(richText)}');
+          break;
+        case 'heading_3':
+          buffer.writeln('### ${_richTextToPlain(richText)}');
+          break;
+        case 'paragraph':
+          buffer.writeln(_richTextToPlain(richText));
+          break;
+        case 'bulleted_list_item':
+          buffer.writeln('- ${_richTextToPlain(richText)}');
+          break;
+        case 'numbered_list_item':
+          buffer.writeln('1. ${_richTextToPlain(richText)}');
+          break;
+        case 'to_do':
+          final checked = content['checked'] == true;
+          buffer.writeln('- [${checked ? 'x' : ' '}] ${_richTextToPlain(richText)}');
+          break;
+        case 'code':
+          buffer.writeln('```');
+          buffer.writeln(_richTextToPlain(richText));
+          buffer.writeln('```');
+          break;
+        case 'divider':
+          buffer.writeln('---');
+          break;
+        default:
+          buffer.writeln(_richTextToPlain(richText));
+      }
+      buffer.writeln();
+    }
+    return buffer.toString().isEmpty ? '（空页面）' : buffer.toString();
+  }
+
+  String _richTextToPlain(List richText) {
+    return richText.map((t) => t['plain_text'] ?? '').join('');
+  }
+
+  Future<void> _showDebugLogs() async {
+    final logs = await AppLogger.readLogs();
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('调试日志'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: SingleChildScrollView(
+            child: SelectableText(logs, style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+        ],
+      ),
+    );
+  }
 
   Future<void> _logout() async {
     await NotionAuth.removeToken();
@@ -30,9 +196,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_currentTitle),
+        title: const Text('Notion App'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: () => setState(() {})),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchPages),
+          IconButton(icon: const Icon(Icons.bug_report), onPressed: _showDebugLogs),
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'logout') _logout();
@@ -49,47 +216,105 @@ class _HomeScreenState extends State<HomeScreen> {
             selectedIndex: _currentNavIndex,
             onDestinationSelected: (index) {
               setState(() => _currentNavIndex = index);
-              switch (index) {
-                case 0:
-                  _currentTitle = '主页';
-                  _currentContent = '# 主页\n\n最近页面和空间概览';
-                case 1:
-                  _currentTitle = '所有页面';
-                  _currentContent = '# 所有页面\n\n你的 Notion 页面列表';
-                case 2:
-                  _currentTitle = '收藏';
-                  _currentContent = '# 收藏\n\n你收藏的页面';
-              }
+              if (index == 0) _fetchPages();
             },
             labelType: NavigationRailLabelType.all,
             destinations: const [
-              NavigationRailDestination(
-                icon: Icon(Icons.home_outlined),
-                selectedIcon: Icon(Icons.home),
-                label: Text('主页'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.article_outlined),
-                selectedIcon: Icon(Icons.article),
-                label: Text('页面'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.favorite_outline),
-                selectedIcon: Icon(Icons.favorite),
-                label: Text('收藏'),
-              ),
+              NavigationRailDestination(icon: Icon(Icons.article_outlined), selectedIcon: Icon(Icons.article), label: Text('页面')),
+              NavigationRailDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: Text('设置')),
             ],
           ),
           const VerticalDivider(width: 1),
-          Expanded(
-            child: Markdown(
-              data: _currentContent,
-              padding: const EdgeInsets.all(24),
-              selectable: true,
-            ),
-          ),
+          Expanded(child: _buildContent()),
         ],
       ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_currentNavIndex == 1) return _buildSettings();
+
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, size: 48, color: Colors.red),
+            const SizedBox(height: 16),
+            Text('加载失败', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(_error!, style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 16),
+            FilledButton(onPressed: _fetchPages, child: const Text('重试')),
+          ],
+        ),
+      );
+    }
+
+    if (_pages.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text('没有找到页面'),
+            const SizedBox(height: 8),
+            const Text('请确保集成已关联到你的 Notion 页面', style: TextStyle(color: Colors.grey, fontSize: 12)),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: _pages.length,
+      itemBuilder: (context, index) {
+        final page = _pages[index];
+        final title = _pageTitle(page);
+        final lastEdited = page['last_edited_time']?.toString() ?? '';
+
+        return Card(
+          child: ListTile(
+            title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: Text('最后编辑: $lastEdited', style: const TextStyle(fontSize: 12)),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _loadPageContent(page['id']),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSettings() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Card(
+          child: SwitchListTile(
+            title: const Text('调试日志'),
+            subtitle: const Text('开启后将 API 请求和错误写入设备日志文件'),
+            value: AppLogger.isEnabled,
+            onChanged: (value) async {
+              await AppLogger.setEnabled(value);
+              setState(() {});
+            },
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.article),
+            title: const Text('查看调试日志'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _showDebugLogs,
+          ),
+        ),
+      ],
     );
   }
 }
