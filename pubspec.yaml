@@ -1,6 +1,6 @@
 name: notion_app
 description: Notion Android App - Android-first, Token login, no AI
-version: 0.0.1+1
+version: 0.1.0+1
 publish_to: 'none'
 
 environment:

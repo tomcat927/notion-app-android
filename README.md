@@ -19,8 +19,8 @@
 
 ## 技术栈
 - Flutter (Dart)
-- Notion API
-- flutter_secure_storage（Token 安全存储）
+- Notion API（`api.notion.com` REST 接口，不依赖网页加载）
+- shared_preferences（Token 本地存储）
 
 ## 快速开始
 
@@ -50,14 +50,17 @@ flutter build appbundle --release
 ```
 lib/
 ├── app/theme/          # 主题管理
-├── core/               # 核心功能（认证、API 客户端）
-├── features/           # 功能模块
-│   ├── auth/           # 登录
-│   ├── home/           # 主界面
-│   └── editor/         # 编辑器
-├── widgets/            # 自定义组件
-└── main.dart           # 入口
+├── core/               # 核心功能（认证、API 客户端、日志）
+│   ├── notion_auth.dart    # Token 存取
+│   ├── notion_client.dart  # Notion API 客户端
+│   └── app_logger.dart     # 调试日志（设备持久化）
+├── features/
+│   ├── auth/           # Token 登录
+│   └── home/           # 页面列表 + 设置
+└── main.dart           # 入口（无 Token 进登录页，有 Token 进主页）
 ```
+
+> 说明：本项目采用 **Notion Integration Token + REST API** 方案，不内嵌 WebView 加载 `app.notion.com`。该网页加载方案在 `develop` 分支试验后因 Notion 浏览器指纹检测而废弃（见 `git log` WebView 相关提交）。
 
 ## License
 MIT
