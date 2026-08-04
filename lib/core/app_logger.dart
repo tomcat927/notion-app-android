@@ -31,6 +31,14 @@ class AppLogger {
     await file.writeAsString(entry, mode: FileMode.append);
   }
 
+  static Future<void> clearLogs() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/notion_app_debug.log');
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+
   static Future<String> readLogs() async {
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/notion_app_debug.log');
