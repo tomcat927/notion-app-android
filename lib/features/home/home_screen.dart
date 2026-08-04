@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/notion_auth.dart';
 import '../../core/notion_client.dart';
@@ -23,21 +24,11 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _pages = [];
   Map<String, dynamic>? _selectedPage;
   List<dynamic>? _pageBlocks;
-  bool _editing = false;
-  final Map<String, TextEditingController> _controllers = {};
 
   @override
   void initState() {
     super.initState();
     _fetchPages();
-  }
-
-  @override
-  void dispose() {
-    for (final controller in _controllers.values) {
-      controller.dispose();
-    }
-    super.dispose();
   }
 
   Future<void> _fetchPages() async {
@@ -82,7 +73,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadPageContent(String pageId) async {
     setState(() {
       _loading = true;
-      _editing = false;
     });
 
     try {
@@ -225,35 +215,23 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: showPage
           ? AppBar(
               title: Text(_pageTitle(_selectedPage!)),
-              leading: _editing
-                  ? IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => setState(() {
-                        _editing = false;
-                        _loadPageContent(_selectedPage!['id']);
-                      }),
-                    )
-                  : IconButton(
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: () => setState(() {
-                        _selectedPage = null;
-                        _pageBlocks = null;
-                      }),
-                    ),
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => setState(() {
+                  _selectedPage = null;
+                  _pageBlocks = null;
+                }),
+              ),
               actions: [
-                if (_editing)
-                  IconButton(
-                    icon: const Icon(Icons.check),
-                    onPressed: _saveEdits,
-                  )
-                else
-                  IconButton(
-                    icon: const Icon(Icons.edit),
-                    onPressed: () => setState(() {
-                      _editing = true;
-                      _initEditors();
-                    }),
-                  ),
+                IconButton(
+                  icon: const Icon(Icons.open_in_browser),
+                  tooltip: '在浏览器中编辑',
+                  onPressed: () => _openInBrowser(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: () => _loadPageContent(_selectedPage!['id']),
+                ),
               ],
             )
           : AppBar(
@@ -382,146 +360,44 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final blocks = _pageBlocks ?? [];
-
-    if (_editing) {
-      return ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: blocks.length,
-        itemBuilder: (context, index) {
-          final block = blocks[index];
-          final type = block['type'] as String? ?? 'paragraph';
-          final id = block['id'] as String;
-
-          if (!_isEditable(block)) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Text(type, style: const TextStyle(color: Colors.grey, fontSize: 11)),
-            );
-          }
-
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: TextField(
-              controller: _controllers[id],
-              decoration: InputDecoration(
-                labelText: _editLabel(type),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-              maxLines: type.startsWith('heading') ? 1 : null,
-              style: TextStyle(
-                fontSize: type == 'heading_1'
-                    ? 24
-                    : type == 'heading_2'
-                        ? 20
-                        : type == 'heading_3'
-                            ? 16
-                            : 14,
-                fontWeight: type.startsWith('heading') ? FontWeight.bold : FontWeight.normal,
+    final markdown = _blocksToMarkdown(blocks);
+    return Column(
+      children: [
+        Expanded(
+          child: Markdown(data: markdown, padding: const EdgeInsets.all(24), selectable: true),
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.open_in_browser),
+                label: const Text('在官方页面编辑'),
+                onPressed: _openInBrowser,
               ),
             ),
-          );
-        },
-      );
-    }
-
-    final markdown = _blocksToMarkdown(blocks);
-    return Markdown(data: markdown, padding: const EdgeInsets.all(24), selectable: true);
+          ),
+        ),
+      ],
+    );
   }
 
-  void _initEditors() {
-    for (final controller in _controllers.values) {
-      controller.dispose();
-    }
-    _controllers.clear();
-    final blocks = _pageBlocks ?? [];
-    for (final block in blocks) {
-      if (!_isEditable(block)) continue;
-      final id = block['id'] as String;
-      final text = _blockPlainText(block);
-      _controllers[id] = TextEditingController(text: text);
-    }
-  }
+  Future<void> _openInBrowser() async {
+    final pageId = _selectedPage?['id'];
+    if (pageId == null) return;
 
-  bool _isEditable(dynamic block) {
-    final type = block['type'] as String? ?? '';
-    return [
-      'paragraph',
-      'heading_1',
-      'heading_2',
-      'heading_3',
-      'bulleted_list_item',
-      'numbered_list_item',
-      'to_do',
-    ].contains(type);
-  }
-
-  String _blockPlainText(dynamic block) {
-    final type = block['type'] as String? ?? '';
-    final content = block[type] as Map<String, dynamic>? ?? {};
-    final richText = content['rich_text'] as List? ?? [];
-    return richText.map((t) => t['plain_text'] ?? '').join('');
-  }
-
-  String _editLabel(String type) {
-    switch (type) {
-      case 'heading_1':
-        return '标题1';
-      case 'heading_2':
-        return '标题2';
-      case 'heading_3':
-        return '标题3';
-      case 'paragraph':
-        return '段落';
-      case 'bulleted_list_item':
-        return '列表';
-      case 'numbered_list_item':
-        return '编号';
-      case 'to_do':
-        return '待办';
-      default:
-        return type;
-    }
-  }
-
-  Future<void> _saveEdits() async {
-    final blocks = _pageBlocks ?? [];
-    if (blocks.isEmpty) return;
-
-    setState(() => _loading = true);
+    final url = 'https://www.notion.so/$pageId';
+    await AppLogger.log('Home', '在浏览器打开编辑: $url');
 
     try {
-      await AppLogger.log('Home', '开始保存编辑，共 ${blocks.length} 块');
-
-      for (final block in blocks) {
-        if (!_isEditable(block)) continue;
-        final id = block['id'] as String;
-        final controller = _controllers[id];
-        if (controller == null) continue;
-
-        final type = block['type'] as String;
-        final body = {
-          type: {
-            'rich_text': [
-              {'type': 'text', 'text': {'content': controller.text}}
-            ]
-          }
-        };
-
-        await NotionClient.patch('/blocks/$id', body: body);
-        await AppLogger.log('Home', '已保存块 $id');
-      }
-
-      await AppLogger.log('Home', '保存编辑完成');
-
-      setState(() => _editing = false);
-      await _loadPageContent(_selectedPage!['id']);
+      final opened = await launchUrl(
+        Uri.parse(url),
+        mode: LaunchMode.externalApplication,
+      );
+      await AppLogger.log('Home', opened ? '浏览器打开成功' : '浏览器打开失败');
     } catch (e) {
-      await AppLogger.log('Home', '保存编辑失败: $e');
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+      await AppLogger.log('Home', '浏览器打开异常: $e');
     }
   }
 
