@@ -2,12 +2,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/notion_auth.dart';
 import '../../core/notion_client.dart';
 import '../../core/app_logger.dart';
 import '../auth/login_screen.dart';
+import '../editor/editor_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -224,9 +224,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               actions: [
                 IconButton(
-                  icon: const Icon(Icons.open_in_browser),
-                  tooltip: '在浏览器中编辑',
-                  onPressed: () => _openInBrowser(),
+                  icon: const Icon(Icons.edit),
+                  tooltip: '编辑页面',
+                  onPressed: _openEditor,
                 ),
                 IconButton(
                   icon: const Icon(Icons.refresh),
@@ -372,9 +372,9 @@ class _HomeScreenState extends State<HomeScreen> {
             child: SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                icon: const Icon(Icons.open_in_browser),
-                label: const Text('在官方页面编辑'),
-                onPressed: _openInBrowser,
+                icon: const Icon(Icons.edit),
+                label: const Text('编辑此页面'),
+                onPressed: _openEditor,
               ),
             ),
           ),
@@ -383,22 +383,23 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _openInBrowser() async {
-    final pageId = _selectedPage?['id'];
-    if (pageId == null) return;
+  Future<void> _openEditor() async {
+    final pageId = _selectedPage?['id']?.toString();
+    if (pageId == null || pageId.isEmpty) return;
 
-    final url = 'https://www.notion.so/$pageId';
-    await AppLogger.log('Home', '在浏览器打开编辑: $url');
+    await AppLogger.log('Home', '打开编辑器: $pageId');
 
-    try {
-      final opened = await launchUrl(
-        Uri.parse(url),
-        mode: LaunchMode.externalApplication,
-      );
-      await AppLogger.log('Home', opened ? '浏览器打开成功' : '浏览器打开失败');
-    } catch (e) {
-      await AppLogger.log('Home', '浏览器打开异常: $e');
-    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => EditorScreen(
+          pageId: pageId,
+          title: _pageTitle(_selectedPage!),
+        ),
+      ),
+    );
+
+    await _loadPageContent(pageId);
   }
 
   Widget _buildSettings() {
