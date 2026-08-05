@@ -18,12 +18,11 @@ class _EditorScreenState extends State<EditorScreen> {
   int _loadProgress = 0;
   bool _loading = true;
   bool _loadFailed = false;
+  bool _initialized = false;
 
   @override
   void initState() {
     super.initState();
-
-    final url = 'https://www.notion.so/${widget.pageId}';
 
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -31,9 +30,10 @@ class _EditorScreenState extends State<EditorScreen> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (progress) {
-            setState(() => _loadProgress = progress);
+            if (_initialized) setState(() => _loadProgress = progress);
           },
           onPageStarted: (url) {
+            if (!_initialized || url.startsWith('about:')) return;
             AppLogger.log('Editor', '加载: $url');
             setState(() {
               _loading = true;
@@ -41,6 +41,7 @@ class _EditorScreenState extends State<EditorScreen> {
             });
           },
           onPageFinished: (url) {
+            if (url.startsWith('about:')) return;
             AppLogger.log('Editor', '完成: $url');
             setState(() {
               _loading = false;
@@ -48,16 +49,60 @@ class _EditorScreenState extends State<EditorScreen> {
             });
           },
           onWebResourceError: (error) {
+            if (!_initialized) return;
             AppLogger.log('Editor', '加载错误: ${error.description} (${error.errorCode})');
             setState(() => _loadFailed = true);
           },
         ),
-      )
-      ..loadRequest(Uri.parse(url));
+      );
+
+    _initWithCleanUserAgent();
+  }
+
+  /// 系统 WebView 默认 UA 带 `; wv` 和 `Version/4.0` 标记，
+  /// Notion 服务端据此判定为"非标准浏览器"并拒绝加载。
+  /// 先读取真实 UA，清理标记后再加载目标页面，使其与真实移动 Chrome UA 一致。
+  Future<void> _initWithCleanUserAgent() async {
+    try {
+      await _controller.loadRequest(Uri.parse('about:blank'));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final raw = await _controller.runJavaScriptReturningResult('navigator.userAgent');
+      final rawUa = raw.toString().replaceAll('"', '');
+      final cleanUa = _cleanUserAgent(rawUa);
+      AppLogger.log('Editor', '清理后 UA: $cleanUa');
+
+      await _controller.setUserAgent(cleanUa);
+      _initialized = true;
+    } catch (e) {
+      AppLogger.log('Editor', 'UA 初始化失败: $e');
+      _initialized = true;
+    }
+
+    await _loadPage();
+  }
+
+  String _cleanUserAgent(String ua) {
+    var result = ua.replaceFirst(RegExp(r'; wv'), '');
+    result = result.replaceFirst(RegExp(r'Version/\d+(\.\d+)*\s'), '');
+    return result;
+  }
+
+  Future<void> _loadPage() async {
+    final url = 'https://www.notion.so/${widget.pageId}';
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
+    await _controller.loadRequest(Uri.parse(url));
   }
 
   Future<void> _refresh() async {
-    _controller.reload();
+    if (_initialized) {
+      await _controller.reload();
+    } else {
+      await _loadPage();
+    }
   }
 
   Future<void> _goBack() async {

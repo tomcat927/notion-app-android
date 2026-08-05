@@ -19,9 +19,12 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentNavIndex = 0;
   bool _loading = true;
+  bool _loadingMore = false;
   String? _error;
 
   List<Map<String, dynamic>> _pages = [];
+  String? _nextCursor;
+  bool _hasMore = false;
   Map<String, dynamic>? _selectedPage;
   List<dynamic>? _pageBlocks;
 
@@ -35,6 +38,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _nextCursor = null;
+      _hasMore = false;
     });
 
     try {
@@ -43,11 +48,10 @@ class _HomeScreenState extends State<HomeScreen> {
       final response = await NotionClient.post('/search', body: {
         'filter': {'property': 'object', 'value': 'page'},
         'sort': {'direction': 'descending', 'timestamp': 'last_edited_time'},
-        'page_size': 50,
+        'page_size': 20,
       });
 
       await AppLogger.log('Home', 'API 响应状态: ${response.statusCode}');
-      await AppLogger.log('Home', '响应体: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -56,6 +60,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
         setState(() {
           _pages = results;
+          _nextCursor = data['next_cursor'] as String?;
+          _hasMore = data['has_more'] == true;
           _loading = false;
         });
       } else {
@@ -67,6 +73,42 @@ class _HomeScreenState extends State<HomeScreen> {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _loadMorePages() async {
+    final cursor = _nextCursor;
+    if (_loadingMore || !_hasMore || cursor == null) return;
+
+    setState(() => _loadingMore = true);
+
+    try {
+      await AppLogger.log('Home', '加载更多页面，cursor: $cursor');
+
+      final response = await NotionClient.post('/search', body: {
+        'filter': {'property': 'object', 'value': 'page'},
+        'sort': {'direction': 'descending', 'timestamp': 'last_edited_time'},
+        'page_size': 20,
+        'start_cursor': cursor,
+      });
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+        await AppLogger.log('Home', '追加 ${results.length} 个页面');
+
+        setState(() {
+          _pages = [..._pages, ...results];
+          _nextCursor = data['next_cursor'] as String?;
+          _hasMore = data['has_more'] == true;
+          _loadingMore = false;
+        });
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+    } catch (e) {
+      await AppLogger.log('Home', '加载更多失败: $e');
+      setState(() => _loadingMore = false);
     }
   }
 
@@ -315,8 +357,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
-      itemCount: _pages.length,
+      itemCount: _pages.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
+        if (index >= _pages.length) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Center(
+              child: _loadingMore
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : OutlinedButton.icon(
+                      onPressed: _loadMorePages,
+                      icon: const Icon(Icons.expand_more),
+                      label: const Text('加载更多'),
+                    ),
+            ),
+          );
+        }
+
         final page = _pages[index];
         final title = _pageTitle(page);
         final lastEdited = page['last_edited_time']?.toString() ?? '';
