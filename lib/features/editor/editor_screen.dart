@@ -60,8 +60,9 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   /// 系统 WebView 默认 UA 带 `; wv` 和 `Version/4.0` 标记，
-  /// Notion 服务端据此判定为"非标准浏览器"并拒绝加载。
-  /// 先读取真实 UA，清理标记后再加载目标页面，使其与真实移动 Chrome UA 一致。
+  /// 且内置 WebView 内核版本往往落后多个大版本（如 Chrome/117）。
+  /// Notion 服务端要求浏览器版本接近最新，落后太多或带 WebView 标记都会被拒绝。
+  /// 先读取真实 UA，清理标记并将 Chrome 版本号提升到最新稳定版，再加载目标页面。
   Future<void> _initWithCleanUserAgent() async {
     try {
       await _controller.loadRequest(Uri.parse('about:blank'));
@@ -85,6 +86,10 @@ class _EditorScreenState extends State<EditorScreen> {
   String _cleanUserAgent(String ua) {
     var result = ua.replaceFirst(RegExp(r'; wv'), '');
     result = result.replaceFirst(RegExp(r'Version/\d+(\.\d+)*\s'), '');
+    result = result.replaceFirst(
+      RegExp(r'Chrome/\d+(\.\d+)*'),
+      'Chrome/151.0.7922.71',
+    );
     return result;
   }
 
