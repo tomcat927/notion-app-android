@@ -50,8 +50,8 @@ class _EditorScreenState extends State<EditorScreen> {
           },
           onWebResourceError: (error) {
             if (!_initialized) return;
-            AppLogger.log('Editor', '加载错误: ${error.description} (${error.errorCode})${error.isForMainFrame ? ' [主框架]' : ' [子资源]'}');
-            if (error.isForMainFrame) {
+            AppLogger.log('Editor', '加载错误: ${error.description} (${error.errorCode})${error.isForMainFrame == true ? ' [主框架]' : ' [子资源]'}');
+            if (error.isForMainFrame == true) {
               setState(() => _loadFailed = true);
             }
           },
