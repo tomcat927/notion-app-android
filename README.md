@@ -6,7 +6,7 @@
 - Token 登录，无需 Notion 账号密码
 - 解决官方 Android App 固定页面跳转问题
 - 移除所有 AI 功能
-- 块级编辑体验
+- App 内 REST API 块级编辑，不依赖 Notion 网页或 WebView
 
 ## 获取 Notion Token
 
@@ -21,6 +21,13 @@
 - Flutter (Dart)
 - Notion API（`api.notion.com` REST 接口，不依赖网页加载）
 - shared_preferences（Token 本地存储）
+
+## 编辑能力
+
+- 可编辑段落、三级标题、项目符号列表、编号列表、待办、折叠块、引用、标注和代码块
+- 可读取并编辑嵌套块，可在页面末尾新增段落
+- 图片、文件、数据库等暂不支持修改的块会以只读方式显示
+- 仅修改待办状态不会影响原文本格式；修改带行内格式的文本会将该块转换为纯文本，保存前界面会提示
 
 ## 快速开始
 
@@ -56,11 +63,12 @@ lib/
 │   └── app_logger.dart     # 调试日志（设备持久化）
 ├── features/
 │   ├── auth/           # Token 登录
-│   └── home/           # 页面列表 + 设置
+│   ├── editor/         # API 块编辑器
+│   └── home/           # 页面列表、阅读视图 + 设置
 └── main.dart           # 入口（无 Token 进登录页，有 Token 进主页）
 ```
 
-> 说明：本项目采用 **Notion Integration Token + REST API** 方案，不内嵌 WebView 加载 `app.notion.com`。该网页加载方案在 `develop` 分支试验后因 Notion 浏览器指纹检测而废弃（见 `git log` WebView 相关提交）。
+> 说明：本项目采用 **Notion Integration Token + REST API** 方案，不内嵌 WebView 加载 `app.notion.com`。Integration Token 不是 Notion 网页登录凭据，无法为 WebView 建立可编辑的网页登录态；网页方案还会受到浏览器指纹和子资源连接策略影响，因此不作为编辑链路。
 
 ## License
 MIT
