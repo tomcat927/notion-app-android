@@ -1,12 +1,17 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'app_logger.dart';
 
 class NotionClient {
   static const String _apiBase = 'https://api.notion.com/v1';
   static const Duration _requestTimeout = Duration(seconds: 30);
   static const int _maxRateLimitRetries = 3;
+  static const int _maxHandshakeRetries = 3;
+  static const int _initialHandshakeRetryDelayMs = 500;
 
   static Future<Map<String, String>> _headers() async {
     final prefs = await SharedPreferences.getInstance();
@@ -23,7 +28,10 @@ class NotionClient {
   static Future<http.Response> get(String endpoint) async {
     final url = Uri.parse('$_apiBase$endpoint');
     final headers = await _headers();
-    return _withRateLimitRetry(() => http.get(url, headers: headers));
+    return _withRetry(
+      () => http.get(url, headers: headers),
+      url: url,
+    );
   }
 
   static Future<http.Response> post(
@@ -33,8 +41,9 @@ class NotionClient {
     final url = Uri.parse('$_apiBase$endpoint');
     final headers = await _headers();
     final encodedBody = jsonEncode(body);
-    return _withRateLimitRetry(
+    return _withRetry(
       () => http.post(url, headers: headers, body: encodedBody),
+      url: url,
     );
   }
 
@@ -45,26 +54,64 @@ class NotionClient {
     final url = Uri.parse('$_apiBase$endpoint');
     final headers = await _headers();
     final encodedBody = jsonEncode(body);
-    return _withRateLimitRetry(
+    return _withRetry(
       () => http.patch(url, headers: headers, body: encodedBody),
+      url: url,
     );
   }
 
-  static Future<http.Response> _withRateLimitRetry(
-    Future<http.Response> Function() request,
-  ) async {
-    for (var attempt = 0; ; attempt++) {
-      final response = await request().timeout(_requestTimeout);
-      if (response.statusCode != 429 || attempt >= _maxRateLimitRetries) {
-        return response;
-      }
+  static Future<http.Response> _withRetry(
+    Future<http.Response> Function() request, {
+    required Uri url,
+  }) async {
+    var rateLimitRetries = 0;
+    var handshakeRetries = 0;
 
-      final retryAfter =
-          double.tryParse(response.headers['retry-after'] ?? '') ??
-              (attempt + 1).toDouble();
-      await Future<void>.delayed(
-        Duration(milliseconds: (retryAfter * 1000).ceil()),
-      );
+    while (true) {
+      try {
+        final response = await request().timeout(_requestTimeout);
+        if (response.statusCode != 429 ||
+            rateLimitRetries >= _maxRateLimitRetries) {
+          return response;
+        }
+
+        final retryAfter =
+            double.tryParse(response.headers['retry-after'] ?? '') ??
+                (rateLimitRetries + 1).toDouble();
+        rateLimitRetries++;
+        await Future<void>.delayed(
+          Duration(milliseconds: (retryAfter * 1000).ceil()),
+        );
+      } on HandshakeException catch (error) {
+        // A failed TLS handshake happens before the HTTP request is sent, so
+        // retrying PATCH requests here cannot duplicate an accepted write.
+        if (handshakeRetries >= _maxHandshakeRetries) {
+          throw NotionConnectionException(
+            host: url.host,
+            attempts: handshakeRetries + 1,
+            cause: error,
+          );
+        }
+
+        final delay = Duration(
+          milliseconds:
+              _initialHandshakeRetryDelayMs * (1 << handshakeRetries),
+        );
+        handshakeRetries++;
+        await _logRetry(
+          '${url.host} TLS 握手失败，${delay.inMilliseconds}ms 后进行第 '
+          '${handshakeRetries + 1} 次连接: $error',
+        );
+        await Future<void>.delayed(delay);
+      }
+    }
+  }
+
+  static Future<void> _logRetry(String message) async {
+    try {
+      await AppLogger.log('HTTP', message);
+    } catch (_) {
+      // Diagnostics must not interrupt a network retry.
     }
   }
 
@@ -93,6 +140,25 @@ class NotionClient {
       statusCode: response.statusCode,
       detail: detail,
     );
+  }
+}
+
+class NotionConnectionException implements Exception {
+  final String host;
+  final int attempts;
+  final Object cause;
+
+  const NotionConnectionException({
+    required this.host,
+    required this.attempts,
+    required this.cause,
+  });
+
+  @override
+  String toString() {
+    return '无法与 $host 建立安全连接，已尝试 $attempts 次。'
+        '请切换 Wi-Fi/移动网络，并确认代理或 VPN 对此 App 生效。'
+        '原始错误: $cause';
   }
 }
 
