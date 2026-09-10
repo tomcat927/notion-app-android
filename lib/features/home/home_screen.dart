@@ -45,6 +45,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _error;
 
   List<Map<String, dynamic>> _databases = [];
+  Map<String, dynamic>? _selectedSource;
   String _sourceId = '__recent__';
   String _sourceTitle = '最近页面';
   List<DatabaseView> _views = const [];
@@ -53,7 +54,6 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _pages = [];
   String? _nextCursor;
   bool _hasMore = false;
-  String? _viewQueryId;
   Map<String, dynamic>? _selectedPage;
   List<dynamic>? _pageBlocks;
 
@@ -107,6 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _databases = results;
+      _selectedSource = selected;
       _sourceId = sourceId;
       _sourceTitle = selected == null ? '最近页面' : _databaseTitle(selected);
       _views = const <DatabaseView>[];
@@ -178,44 +179,8 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      final view = _activeView;
-      Map<String, dynamic> data;
-      List<Map<String, dynamic>> results;
-
-      if (_sourceId == '__recent__') {
-        final response = await NotionClient.post('/search', body: {
-          'filter': {'property': 'object', 'value': 'page'},
-          'sort': {
-            'direction': 'descending',
-            'timestamp': 'last_edited_time',
-          },
-          'page_size': 100,
-        });
-        NotionClient.ensureSuccess(response, operation: '加载记录');
-        data = jsonDecode(response.body) as Map<String, dynamic>;
-        results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-        _viewQueryId = null;
-      } else if (view.isNative) {
-        try {
-          final response = await NotionClient.post(
-            '/views/${view.id}/queries',
-            body: {'page_size': 100},
-          );
-          NotionClient.ensureSuccess(response, operation: '加载视图记录');
-          data = jsonDecode(response.body) as Map<String, dynamic>;
-          _viewQueryId = data['id']?.toString();
-          results = await _hydrateViewResults(data['results']);
-        } catch (error) {
-          await AppLogger.log('Home', '视图查询失败，降级到数据源查询: $error');
-          _viewQueryId = null;
-          data = await _queryDataSourceRows();
-          results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-        }
-      } else {
-        data = await _queryDataSourceRows(cursor: null);
-        results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-      }
-
+      final data = await _loadRowsPage();
+      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
       if (!mounted) return;
       setState(() {
         _pages = results;
@@ -240,38 +205,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _loadingMore = true);
 
     try {
-      final view = _activeView;
-      final Map<String, dynamic> data;
-      final List<Map<String, dynamic>> results;
-
-      if (_sourceId == '__recent__') {
-        final response = await NotionClient.post('/search', body: {
-          'filter': {'property': 'object', 'value': 'page'},
-          'sort': {
-            'direction': 'descending',
-            'timestamp': 'last_edited_time',
-          },
-          'page_size': 100,
-          'start_cursor': cursor,
-        });
-        NotionClient.ensureSuccess(response, operation: '加载更多记录');
-        data = jsonDecode(response.body) as Map<String, dynamic>;
-        results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-      } else if (view.isNative && _viewQueryId != null) {
-        final encodedQueryId = Uri.encodeQueryComponent(_viewQueryId!);
-        final encodedCursor = Uri.encodeQueryComponent(cursor);
-        final response = await NotionClient.get(
-          '/views/${view.id}/queries/$encodedQueryId'
-          '?page_size=100&start_cursor=$encodedCursor',
-        );
-        NotionClient.ensureSuccess(response, operation: '加载更多视图记录');
-        data = jsonDecode(response.body) as Map<String, dynamic>;
-        results = await _hydrateViewResults(data['results']);
-      } else {
-        data = await _queryDataSourceRows(cursor: cursor);
-        results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-      }
-
+      final data = await _loadRowsPage(cursor: cursor);
+      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
       if (!mounted) return;
       setState(() {
         _pages = [..._pages, ...results];
@@ -289,110 +224,104 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<Map<String, dynamic>> _loadRowsPage({String? cursor}) async {
+    if (_sourceId == '__recent__') {
+      final response = await NotionClient.post('/search', body: {
+        'filter': {'property': 'object', 'value': 'page'},
+        'sort': {
+          'direction': 'descending',
+          'timestamp': 'last_edited_time',
+        },
+        'page_size': 100,
+        if (cursor != null) 'start_cursor': cursor,
+      });
+      NotionClient.ensureSuccess(response, operation: '加载记录');
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    return _queryDataSourceRows(cursor: cursor);
+  }
+
   DatabaseView get _activeView => _views.firstWhere(
         (view) => view.id == _viewId,
         orElse: () => const DatabaseView(id: 'all', label: '全部'),
       );
 
+  List<Map<String, dynamic>> _sanitizeSorts(
+    List<Map<String, dynamic>> sorts,
+  ) {
+    final properties = _selectedSource?['properties'];
+    if (properties is! Map || sorts.isEmpty) return const [];
+
+    final validProperties = <String>{};
+    properties.forEach((key, value) {
+      if (key != null) validProperties.add(_propertyKey(key.toString()));
+      if (value is Map && value['id'] != null) {
+        validProperties.add(_propertyKey(value['id'].toString()));
+      }
+    });
+
+    return sorts
+        .where((sort) {
+          if (sort['timestamp'] != null) return true;
+          final property = sort['property']?.toString();
+          return property != null &&
+              validProperties.contains(_propertyKey(property));
+        })
+        .toList();
+  }
+
+  String _propertyKey(String value) {
+    return value.replaceAll('-', '').toLowerCase();
+  }
+
   Future<Map<String, dynamic>> _queryDataSourceRows({String? cursor}) async {
     final view = _activeView;
-    if (view.filter != null) {
+    final sorts = _sanitizeSorts(view.sorts);
+
+    Future<Map<String, dynamic>?> request({
+      required bool useFilter,
+      required bool useSorts,
+    }) async {
       final response = await NotionClient.post(
         '/data_sources/$_sourceId/query',
         body: {
           'page_size': 100,
           if (cursor != null) 'start_cursor': cursor,
-          'filter': view.filter,
+          if (useFilter && view.filter != null) 'filter': view.filter,
+          if (useSorts && sorts.isNotEmpty) 'sorts': sorts,
+          if (!useFilter && !useSorts)
+            'sorts': [
+              {'direction': 'descending', 'timestamp': 'last_edited_time'}
+            ],
         },
       );
+
       if (response.statusCode == 400) {
         await AppLogger.log(
           'Home',
-          '视图筛选不可用，改为查询全部记录: ${response.body}',
+          '数据源查询参数不可用，自动降级: ${response.body}',
         );
-      } else {
-        NotionClient.ensureSuccess(response, operation: '加载数据源记录');
-        return jsonDecode(response.body) as Map<String, dynamic>;
+        return null;
       }
+
+      NotionClient.ensureSuccess(response, operation: '加载数据源记录');
+      return jsonDecode(response.body) as Map<String, dynamic>;
     }
 
-    final response = await NotionClient.post(
-      '/data_sources/$_sourceId/query',
-      body: {
-        'page_size': 100,
-        if (cursor != null) 'start_cursor': cursor,
-        'sorts': [
-          {'direction': 'descending', 'timestamp': 'last_edited_time'}
-        ],
-      },
-    );
-    NotionClient.ensureSuccess(response, operation: '加载数据源记录');
-    return jsonDecode(response.body) as Map<String, dynamic>;
-  }
+    if (view.filter != null) {
+      final filtered = await request(useFilter: true, useSorts: true);
+      if (filtered != null) return filtered;
 
-  Future<List<Map<String, dynamic>>> _hydrateViewResults(Object? results) async {
-    if (results is! List) return const [];
-
-    final orderedIds = results
-        .whereType<Map>()
-        .map((item) => item['id']?.toString())
-        .whereType<String>()
-        .toList();
-    final pages = List<Map<String, dynamic>>.filled(
-      orderedIds.length,
-      const {},
-      growable: false,
-    );
-    final missingIds = orderedIds.toSet();
-    final pagesById = <String, Map<String, dynamic>>{};
-
-    try {
-      String? cursor;
-      var requestCount = 0;
-      while (missingIds.isNotEmpty && requestCount < 50) {
-        final response = await NotionClient.post(
-          '/data_sources/$_sourceId/query',
-          body: {
-            'page_size': 100,
-            if (cursor != null) 'start_cursor': cursor,
-          },
-        );
-        NotionClient.ensureSuccess(response, operation: '读取页面详情');
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final sourcePages =
-            List<Map<String, dynamic>>.from(data['results'] ?? []);
-
-        for (final page in sourcePages) {
-          final pageId = page['id']?.toString();
-          if (pageId == null || !missingIds.contains(pageId)) continue;
-          pagesById[pageId] = page;
-          missingIds.remove(pageId);
-        }
-
-        cursor = data['next_cursor'] as String?;
-        requestCount++;
-        if (cursor == null) break;
-      }
-    } catch (_) {
-      // Fall through and fetch any still-missing rows individually.
+      final filteredWithoutSorts = await request(
+        useFilter: true,
+        useSorts: false,
+      );
+      if (filteredWithoutSorts != null) return filteredWithoutSorts;
     }
 
-    for (var index = 0; index < orderedIds.length; index++) {
-      final pageId = orderedIds[index];
-      var page = pagesById[pageId];
-      if (page == null) {
-        try {
-          final response = await NotionClient.get('/pages/$pageId');
-          NotionClient.ensureSuccess(response, operation: '读取页面');
-          page = jsonDecode(response.body) as Map<String, dynamic>;
-        } catch (_) {
-          page = {'object': 'page', 'id': pageId};
-        }
-      }
-      pages[index] = page;
-    }
-
-    return pages;
+    final allRows = await request(useFilter: false, useSorts: false);
+    return allRows!;
   }
 
   String _richText(List value) {
@@ -419,6 +348,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     setState(() {
       _sourceId = database['id'].toString();
+      _selectedSource = database;
       _sourceTitle = _databaseTitle(database);
       _viewId = 'all';
     });
