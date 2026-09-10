@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -95,25 +97,21 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         final picker = ImagePicker();
         if (params.mode == FileSelectorMode.openMultiple) {
           final images = await picker.pickMultiImage();
+          final paths = <String>[];
           for (final image in images) {
-            await AppLogger.log(
-              'Browser',
-              '选中图片: ${image.path}, 存在: ${File(image.path).existsSync()}',
-            );
+            final copied = await _copyToWebViewTemp(image.path);
+            if (copied != null) paths.add(copied);
           }
-          return images.map((image) => image.path).toList();
+          return paths;
         }
         final image = await picker.pickImage(source: ImageSource.gallery);
         if (image == null) {
           await AppLogger.log('Browser', '图片选择取消');
           return const [];
         }
-        final file = File(image.path);
-        await AppLogger.log(
-          'Browser',
-          '选中图片: ${image.path}, 存在: ${file.existsSync()}, 大小: ${file.existsSync() ? file.lengthSync() : 0}',
-        );
-        return [image.path];
+        final copied = await _copyToWebViewTemp(image.path);
+        if (copied == null) return const [];
+        return [copied];
       } catch (error) {
         await AppLogger.log('Browser', '图片选择失败: $error');
         return const [];
@@ -135,6 +133,40 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     } catch (error) {
       await AppLogger.log('Browser', '文件选择失败: $error');
       return const [];
+    }
+  }
+
+  /// image_picker 会把文件复制到 cache 的 UUID 子目录里，
+  /// Android WebView 沙箱可能无权读取，统一复制到 cache 根目录。
+  Future<String?> _copyToWebViewTemp(String sourcePath) async {
+    try {
+      final sourceFile = File(sourcePath);
+      if (!sourceFile.existsSync()) {
+        await AppLogger.log('Browser', '源文件不存在: $sourcePath');
+        return null;
+      }
+      final size = sourceFile.lengthSync();
+      if (size == 0) {
+        await AppLogger.log('Browser', '源文件为空: $sourcePath');
+        return null;
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final fileName =
+          'webview_upload_${DateTime.now().millisecondsSinceEpoch}'
+          '${p.extension(sourcePath)}';
+      final newPath = p.join(tempDir.path, fileName);
+      await sourceFile.copy(newPath);
+
+      final copiedFile = File(newPath);
+      await AppLogger.log(
+        'Browser',
+        '文件已复制: $newPath, 大小: ${copiedFile.lengthSync()}',
+      );
+      return newPath;
+    } catch (error) {
+      await AppLogger.log('Browser', '复制文件失败: $error');
+      return null;
     }
   }
 
