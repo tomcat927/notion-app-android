@@ -66,13 +66,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String _sourceTitle = '最近页面';
   List<DatabaseView> _views = const [];
   String _viewId = 'all';
+  DatabaseView? _startupView;
 
   DatabaseView? get _activeView {
     if (_searchActive) return null;
     for (final view in _views) {
       if (view.id == _viewId) return view;
     }
-    return null;
+    return _startupView;
   }
 
   Map<String, dynamic>? get _dataSourceFilter {
@@ -119,7 +120,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       await _restoreSelectedSource();
-      unawaited(_loadRows());
+      await _restoreStartupView();
+      await _loadRows();
       if (_sourceId != '__recent__') {
         unawaited(_loadViews());
       }
@@ -161,6 +163,53 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _applySource(firstSource);
     await prefs.setString('selected_data_source_id', _sourceId);
+  }
+
+  Future<void> _restoreStartupView() async {
+    if (_sourceId == '__recent__') return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getString('startup_view:$_sourceId');
+      if (cached == null || cached.isEmpty) return;
+
+      final data = jsonDecode(cached) as Map<String, dynamic>;
+      final filter = data['filter'];
+      final sorts = data['sorts'];
+      _startupView = DatabaseView(
+        id: data['id']?.toString() ?? '',
+        label: '',
+        filter: filter is Map<String, dynamic> ? filter : null,
+        sorts: sorts is List
+            ? List<Map<String, dynamic>>.from(sorts)
+            : const [],
+      );
+    } catch (_) {
+      // 缓存损坏时静默忽略，首屏退化为默认排序。
+    }
+  }
+
+  Future<void> _cacheStartupView(DatabaseView view) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'startup_view:$_sourceId',
+        jsonEncode({
+          'id': view.id,
+          'filter': view.filter,
+          'sorts': view.sorts,
+        }),
+      );
+    } catch (_) {
+      // 缓存写入失败不影响运行。
+    }
+  }
+
+  bool _viewConditionsDiffer(DatabaseView a, DatabaseView b) {
+    final aFilter = a.filter == null ? '' : jsonEncode(a.filter);
+    final bFilter = b.filter == null ? '' : jsonEncode(b.filter);
+    if (aFilter != bFilter) return true;
+    return jsonEncode(a.sorts) != jsonEncode(b.sorts);
   }
 
   Future<Map<String, dynamic>?> _findFirstSource() async {
@@ -286,9 +335,20 @@ class _HomeScreenState extends State<HomeScreen> {
             break;
           }
         }
-        if (selectedView != null &&
-            (selectedView.filter != null || selectedView.sorts.isNotEmpty)) {
-          unawaited(_loadRows());
+        if (selectedView != null) {
+          await _cacheStartupView(selectedView);
+          final cachedView = _startupView;
+          _startupView = null;
+          final needsReload = cachedView == null
+              ? (selectedView.filter != null ||
+                  selectedView.sorts.isNotEmpty)
+              : cachedView.id != selectedView.id ||
+                  _viewConditionsDiffer(cachedView, selectedView);
+          if (needsReload) {
+            unawaited(_loadRows(silent: true));
+          }
+        } else {
+          _startupView = null;
         }
       }
 
@@ -356,15 +416,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _loadRows() async {
+  Future<void> _loadRows({bool silent = false}) async {
     final generation = ++_loadGeneration;
-    setState(() {
-      _loading = true;
-      _error = null;
-      _pages = [];
-      _nextCursor = null;
-      _hasMore = false;
-    });
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+        _pages = [];
+        _nextCursor = null;
+        _hasMore = false;
+      });
+    }
 
     try {
       final data = await _loadRowsPage();
@@ -382,7 +444,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await AppLogger.log('Home', '加载记录失败: $error');
       setState(() {
         _loading = false;
-        _error = error.toString();
+        if (!silent) _error = error.toString();
       });
     }
   }
@@ -610,6 +672,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _sourceTitle = _databaseTitle(database);
       _views = const [];
       _viewId = 'all';
+      _startupView = null;
       _searchScope = 'current';
       _clearSearch(immediate: true);
     });
@@ -626,6 +689,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _sourceTitle = '最近页面';
       _views = const [];
       _viewId = 'all';
+      _startupView = null;
       _searchScope = 'all';
       _clearSearch(immediate: true);
     });
