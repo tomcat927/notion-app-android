@@ -67,6 +67,27 @@ class _HomeScreenState extends State<HomeScreen> {
   List<DatabaseView> _views = const [];
   String _viewId = 'all';
 
+  DatabaseView? get _activeView {
+    if (_searchActive) return null;
+    for (final view in _views) {
+      if (view.id == _viewId) return view;
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? get _dataSourceFilter {
+    if (_searchActive) return _searchTitleFilter();
+    return _activeView?.filter;
+  }
+
+  List<Map<String, dynamic>> get _dataSourceSorts {
+    final viewSorts = _activeView?.sorts;
+    if (viewSorts != null && viewSorts.isNotEmpty) return viewSorts;
+    return [
+      {'direction': 'descending', 'timestamp': 'last_edited_time'}
+    ];
+  }
+
   List<Map<String, dynamic>> _pages = [];
   String? _nextCursor;
   bool _hasMore = false;
@@ -251,10 +272,25 @@ class _HomeScreenState extends State<HomeScreen> {
       final selectedId = initialViews.any((view) => view.id == savedViewId)
           ? savedViewId!
           : initialViews.first.id;
+      final previousViewId = _viewId;
       setState(() {
         _views = initialViews;
         _viewId = selectedId;
       });
+
+      if (previousViewId != selectedId) {
+        DatabaseView? selectedView;
+        for (final view in initialViews) {
+          if (view.id == selectedId) {
+            selectedView = view;
+            break;
+          }
+        }
+        if (selectedView != null &&
+            (selectedView.filter != null || selectedView.sorts.isNotEmpty)) {
+          unawaited(_loadRows());
+        }
+      }
 
       if (references.length <= initialCount) return;
       final remainingViews = await _fetchViewDetails(
@@ -506,8 +542,9 @@ class _HomeScreenState extends State<HomeScreen> {
     String? cursor,
     int pageSize = _firstPageSize,
   }) async {
-    final filter = _searchTitleFilter();
-    final sorts = [
+    final filter = _dataSourceFilter;
+    final sorts = _dataSourceSorts;
+    final fallbackSorts = [
       {'direction': 'descending', 'timestamp': 'last_edited_time'}
     ];
 
@@ -515,17 +552,14 @@ class _HomeScreenState extends State<HomeScreen> {
       required bool useFilter,
       required bool useSorts,
     }) async {
+      final effectiveSorts = useSorts ? sorts : fallbackSorts;
       final response = await NotionClient.post(
         '/data_sources/$_sourceId/query',
         body: {
           'page_size': pageSize,
           if (cursor != null) 'start_cursor': cursor,
           if (useFilter && filter != null) 'filter': filter,
-          if (useSorts && sorts.isNotEmpty) 'sorts': sorts,
-          if (!useFilter && !useSorts)
-            'sorts': [
-              {'direction': 'descending', 'timestamp': 'last_edited_time'}
-            ],
+          'sorts': effectiveSorts,
         },
       );
 
