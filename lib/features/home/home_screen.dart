@@ -178,8 +178,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final view = _activeView;
-      final Map<String, dynamic> data;
-      final List<Map<String, dynamic>> results;
+      Map<String, dynamic> data;
+      List<Map<String, dynamic>> results;
 
       if (_sourceId == '__recent__') {
         final response = await NotionClient.post('/search', body: {
