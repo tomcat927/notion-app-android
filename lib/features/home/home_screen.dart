@@ -125,6 +125,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _loadRows();
       if (_sourceId != '__recent__') {
         unawaited(_loadViews());
+        unawaited(_refreshSelectedSource());
       }
     } catch (error) {
       if (!mounted) return;
@@ -144,6 +145,22 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // 首选：从本地缓存恢复完整数据源对象，跳过 HTTP 请求。
+    final cachedSource = prefs.getString('selected_data_source');
+    if (cachedSource != null && cachedSource.isNotEmpty) {
+      try {
+        final source = jsonDecode(cachedSource) as Map<String, dynamic>;
+        final cachedId = source['id']?.toString() ?? '';
+        if (cachedId.isNotEmpty && (savedId == null || cachedId == savedId)) {
+          _applySource(source);
+          return;
+        }
+      } catch (_) {
+        // 缓存损坏时回退到 HTTP 获取。
+      }
+    }
+
+    // 次选：仅有 ID 缓存时走 HTTP 获取。
     if (savedId != null && savedId.isNotEmpty) {
       try {
         final response = await NotionClient.get('/data_sources/$savedId');
@@ -164,6 +181,37 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _applySource(firstSource);
     await prefs.setString('selected_data_source_id', _sourceId);
+    await prefs.setString('selected_data_source', jsonEncode(firstSource));
+  }
+
+  Future<void> _refreshSelectedSource() async {
+    if (_sourceId == '__recent__') return;
+
+    try {
+      final response = await NotionClient.get('/data_sources/$_sourceId');
+      NotionClient.ensureSuccess(response, operation: '刷新数据源');
+      final source = jsonDecode(response.body) as Map<String, dynamic>;
+      if (!mounted) return;
+
+      final title = _databaseTitle(source);
+      setState(() {
+        _selectedSource = source;
+        _sourceTitle = title;
+        final index = _databases.indexWhere(
+          (db) => db['id']?.toString() == _sourceId,
+        );
+        if (index >= 0) {
+          _databases[index] = source;
+        } else {
+          _databases = [source, ..._databases];
+        }
+      });
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('selected_data_source', jsonEncode(source));
+    } catch (error) {
+      await AppLogger.log('Home', '刷新数据源信息失败: $error');
+    }
   }
 
   Future<void> _restoreStartupView() async {
@@ -665,6 +713,10 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setString(
       'selected_data_source_id',
       database['id'].toString(),
+    );
+    await prefs.setString(
+      'selected_data_source',
+      jsonEncode(database),
     );
     if (!mounted) return;
     setState(() {
