@@ -72,9 +72,17 @@ class _UpdateSectionState extends State<UpdateSection> {
         _updateInfo = updateInfo;
         _message = updateInfo == null ? '当前已是最新版本' : null;
       });
+      if (updateInfo == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('当前已是最新版本')),
+        );
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _message = '检查更新失败');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('检查更新失败，请检查网络连接')),
+      );
     } finally {
       if (mounted) setState(() => _checking = false);
     }
