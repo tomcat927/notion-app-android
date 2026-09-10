@@ -7,6 +7,7 @@ import '../../core/notion_auth.dart';
 import '../../core/notion_client.dart';
 import '../../core/app_logger.dart';
 import '../auth/login_screen.dart';
+import '../browser/notion_page_browser_screen.dart';
 import '../editor/editor_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -387,13 +388,7 @@ class _HomeScreenState extends State<HomeScreen> {
             title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: Text('最后编辑: $lastEdited', style: const TextStyle(fontSize: 12)),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              setState(() {
-                _selectedPage = page;
-                _error = null;
-              });
-              _loadPageContent(page['id']);
-            },
+            onTap: () => _openPageInBrowser(page),
           ),
         );
       },
@@ -461,6 +456,23 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     await _loadPageContent(pageId);
+  }
+
+  Future<void> _openPageInBrowser(Map<String, dynamic> page) async {
+    final pageId = page['id']?.toString();
+    if (pageId == null || pageId.isEmpty) return;
+
+    await AppLogger.log('Home', '使用内嵌浏览器打开: $pageId');
+
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NotionPageBrowserScreen(
+          pageId: pageId,
+          title: _pageTitle(page),
+        ),
+      ),
+    );
   }
 
   Widget _buildSettings() {

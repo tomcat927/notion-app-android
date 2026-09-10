@@ -6,7 +6,7 @@
 - Token 登录，无需 Notion 账号密码
 - 解决官方 Android App 固定页面跳转问题
 - 移除所有 AI 功能
-- App 内 REST API 块级编辑，不依赖 Notion 网页或 WebView
+- 内嵌 Android WebView 打开 Notion 官方网页编辑器
 
 ## 获取 Notion Token
 
@@ -19,7 +19,8 @@
 
 ## 技术栈
 - Flutter (Dart)
-- Notion API（`api.notion.com` REST 接口，不依赖网页加载）
+- Notion API（`api.notion.com` REST 接口，用于页面列表和旧版轻量编辑）
+- webview_flutter（内嵌 Android WebView，用于页面详情和官方编辑器）
 - shared_preferences（Token 本地存储）
 
 ## 编辑能力
@@ -67,12 +68,13 @@ lib/
 │   └── app_logger.dart     # 调试日志（设备持久化）
 ├── features/
 │   ├── auth/           # Token 登录
+│   ├── browser/        # 内嵌 WebView 详情页
 │   ├── editor/         # API 块编辑器
 │   └── home/           # 页面列表、阅读视图 + 设置
 └── main.dart           # 入口（无 Token 进登录页，有 Token 进主页）
 ```
 
-> 说明：本项目采用 **Notion Integration Token + REST API** 方案，不内嵌 WebView 加载 `app.notion.com`。Integration Token 不是 Notion 网页登录凭据，无法为 WebView 建立可编辑的网页登录态；网页方案还会受到浏览器指纹和子资源连接策略影响，因此不作为编辑链路。
+> 说明：页面列表通过 **Notion Integration Token + REST API** 获取；点击页面详情时使用内嵌 Android WebView 加载 Notion 网页编辑器。Integration Token 不是网页登录凭据，首次在 WebView 中访问页面时仍需要完成 Notion 网页登录。
 
 ## License
 MIT
