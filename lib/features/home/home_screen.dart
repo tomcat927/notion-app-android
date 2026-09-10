@@ -46,6 +46,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _creatingPage = false;
   bool _searchActive = false;
   String _searchQuery = '';
+  String _searchScope = 'current';
   Timer? _searchDebounce;
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
@@ -239,8 +240,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<Map<String, dynamic>> _loadRowsPage({String? cursor}) async {
-    if (_sourceId == '__recent__') {
-      final query = _searchQuery.trim();
+    final query = _searchQuery.trim();
+    if (_sourceId == '__recent__' || (_searchActive && _searchScope == 'all')) {
       final response = await NotionClient.post('/search', body: {
         if (query.isNotEmpty) 'query': query,
         'filter': {'property': 'object', 'value': 'page'},
@@ -251,44 +252,68 @@ class _HomeScreenState extends State<HomeScreen> {
         'page_size': 100,
         if (cursor != null) 'start_cursor': cursor,
       });
-      NotionClient.ensureSuccess(response, operation: '加载记录');
+      NotionClient.ensureSuccess(response, operation: '搜索页面');
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
 
     return _queryDataSourceRows(cursor: cursor);
   }
 
-  DatabaseView get _activeView => _views.firstWhere(
-        (view) => view.id == _viewId,
-        orElse: () => const DatabaseView(id: 'all', label: '全部'),
-      );
+  String _sourceLabelForPage(Map<String, dynamic> page) {
+    final parent = page['parent'];
+    if (parent is! Map) return 'Notion';
 
-  List<Map<String, dynamic>> _sanitizeSorts(
-    List<Map<String, dynamic>> sorts,
-  ) {
-    final properties = _selectedSource?['properties'];
-    if (properties is! Map || sorts.isEmpty) return const [];
+    final type = parent['type']?.toString();
+    final id = switch (type) {
+      'data_source_id' => parent['data_source_id']?.toString(),
+      'database_id' => parent['database_id']?.toString(),
+      _ => null,
+    };
 
-    final validProperties = <String>{};
-    properties.forEach((key, value) {
-      if (key != null) validProperties.add(_propertyKey(key.toString()));
-      if (value is Map && value['id'] != null) {
-        validProperties.add(_propertyKey(value['id'].toString()));
+    if (id != null) {
+      for (final database in _databases) {
+        if (database['id']?.toString() == id) {
+          return _databaseTitle(database);
+        }
       }
-    });
+    }
 
-    return sorts
-        .where((sort) {
-          if (sort['timestamp'] != null) return true;
-          final property = sort['property']?.toString();
-          return property != null &&
-              validProperties.contains(_propertyKey(property));
-        })
-        .toList();
+    return switch (type) {
+      'page_id' => '子页面',
+      'workspace' => '工作区',
+      _ => '未识别来源',
+    };
   }
 
-  String _propertyKey(String value) {
-    return value.replaceAll('-', '').toLowerCase();
+  Widget _buildSearchScopeBar() {
+    return SizedBox(
+      height: 52,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        children: [
+          ChoiceChip(
+            label: const Text('当前库'),
+            selected: _searchScope == 'current',
+            onSelected: _sourceId == '__recent__'
+                ? null
+                : (_) => _selectSearchScope('current'),
+          ),
+          const SizedBox(width: 8),
+          ChoiceChip(
+            label: const Text('全部库'),
+            selected: _searchScope == 'all',
+            onSelected: (_) => _selectSearchScope('all'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _selectSearchScope(String scope) async {
+    if (_searchScope == scope) return;
+    setState(() => _searchScope = scope);
+    await _loadRows();
   }
 
   Map<String, dynamic>? _searchTitleFilter() {
@@ -305,21 +330,11 @@ class _HomeScreenState extends State<HomeScreen> {
     };
   }
 
-  Map<String, dynamic>? _combinedFilter(DatabaseView view) {
-    final viewFilter = view.filter;
-    final searchFilter = _searchTitleFilter();
-    if (searchFilter == null) return viewFilter;
-    if (viewFilter == null) return searchFilter;
-
-    return {
-      'and': [viewFilter, searchFilter],
-    };
-  }
-
   Future<Map<String, dynamic>> _queryDataSourceRows({String? cursor}) async {
-    final view = _activeView;
-    final filter = _combinedFilter(view);
-    final sorts = _sanitizeSorts(view.sorts);
+    final filter = _searchTitleFilter();
+    final sorts = [
+      {'direction': 'descending', 'timestamp': 'last_edited_time'}
+    ];
 
     Future<Map<String, dynamic>?> request({
       required bool useFilter,
@@ -351,16 +366,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
 
-    if (filter != null) {
-      final filtered = await request(useFilter: true, useSorts: true);
-      if (filtered != null) return filtered;
-
-      final filteredWithoutSorts = await request(
-        useFilter: true,
-        useSorts: false,
-      );
-      if (filteredWithoutSorts != null) return filteredWithoutSorts;
-    }
+    final rows = await request(useFilter: true, useSorts: true);
+    if (rows != null) return rows;
 
     final allRows = await request(useFilter: false, useSorts: false);
     return allRows!;
@@ -393,6 +400,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _selectedSource = database;
       _sourceTitle = _databaseTitle(database);
       _viewId = 'all';
+      _searchScope = 'current';
       _clearSearch(immediate: true);
     });
     await _loadViews();
@@ -408,6 +416,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _sourceTitle = '最近页面';
       _views = const [];
       _viewId = 'all';
+      _searchScope = 'all';
       _clearSearch(immediate: true);
     });
     await _loadRows();
@@ -432,6 +441,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openSearch() {
+    if (_sourceId == '__recent__') _searchScope = 'all';
     setState(() => _searchActive = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocus.requestFocus();
@@ -445,6 +455,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onSearchChanged(String value) {
+    setState(() {});
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 300), () {
       final query = value.trim();
@@ -710,7 +721,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
             ),
       body: _buildContent(),
-      floatingActionButton: _currentNavIndex == 0 && _selectedPage == null && _sourceId != '__recent__'
+      floatingActionButton: _currentNavIndex == 0 &&
+              _selectedPage == null &&
+              _sourceId != '__recent__' &&
+              !_searchActive
           ? FloatingActionButton.extended(
               onPressed: _creatingPage ? null : _createPage,
               icon: _creatingPage
@@ -755,7 +769,10 @@ class _HomeScreenState extends State<HomeScreen> {
       onRefresh: _loadRows,
       child: CustomScrollView(
         slivers: [
-          if (_views.length > 1) SliverToBoxAdapter(child: _buildViewBar()),
+          if (_searchActive)
+            SliverToBoxAdapter(child: _buildSearchScopeBar())
+          else if (_views.length > 1)
+            SliverToBoxAdapter(child: _buildViewBar()),
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           if (_loading)
             const SliverFillRemaining(
@@ -797,7 +814,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     const Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
                     const SizedBox(height: 16),
                     Text(
-                      _searchQuery.isEmpty ? '这个视图里没有记录' : '没有匹配的页面',
+                      _searchQuery.isEmpty
+                          ? '这里还没有页面'
+                          : _searchScope == 'all'
+                              ? '全部库中没有匹配页面'
+                              : '当前库中没有匹配页面',
                     ),
                     const SizedBox(height: 8),
                     const Text(
@@ -842,7 +863,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: Text(
-                    '最后编辑 ${_formatDateTime(page['last_edited_time']?.toString())}',
+                    _searchActive && _searchScope == 'all'
+                        ? '${_sourceLabelForPage(page)} · 最后编辑 ${_formatDateTime(page['last_edited_time']?.toString())}'
+                        : '最后编辑 ${_formatDateTime(page['last_edited_time']?.toString())}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12),
