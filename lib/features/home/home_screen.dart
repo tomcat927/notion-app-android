@@ -195,25 +195,23 @@ class _HomeScreenState extends State<HomeScreen> {
         results = List<Map<String, dynamic>>.from(data['results'] ?? []);
         _viewQueryId = null;
       } else if (view.isNative) {
-        final response = await NotionClient.post(
-          '/views/${view.id}/queries',
-          body: {'page_size': 100},
-        );
-        NotionClient.ensureSuccess(response, operation: '加载视图记录');
-        data = jsonDecode(response.body) as Map<String, dynamic>;
-        _viewQueryId = data['id']?.toString();
-        results = await _hydrateViewResults(data['results']);
+        try {
+          final response = await NotionClient.post(
+            '/views/${view.id}/queries',
+            body: {'page_size': 100},
+          );
+          NotionClient.ensureSuccess(response, operation: '加载视图记录');
+          data = jsonDecode(response.body) as Map<String, dynamic>;
+          _viewQueryId = data['id']?.toString();
+          results = await _hydrateViewResults(data['results']);
+        } catch (error) {
+          await AppLogger.log('Home', '视图查询失败，降级到数据源查询: $error');
+          _viewQueryId = null;
+          data = await _queryDataSourceRows();
+          results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+        }
       } else {
-        final response = await NotionClient.post(
-          '/data_sources/$_sourceId/query',
-          body: {
-            'page_size': 100,
-            if (view.filter != null) 'filter': view.filter,
-            if (view.sorts.isNotEmpty) 'sorts': view.sorts,
-          },
-        );
-        NotionClient.ensureSuccess(response, operation: '加载记录');
-        data = jsonDecode(response.body) as Map<String, dynamic>;
+        data = await _queryDataSourceRows(cursor: null);
         results = List<Map<String, dynamic>>.from(data['results'] ?? []);
       }
 
@@ -269,17 +267,7 @@ class _HomeScreenState extends State<HomeScreen> {
         data = jsonDecode(response.body) as Map<String, dynamic>;
         results = await _hydrateViewResults(data['results']);
       } else {
-        final response = await NotionClient.post(
-          '/data_sources/$_sourceId/query',
-          body: {
-            'page_size': 100,
-            'start_cursor': cursor,
-            if (view.filter != null) 'filter': view.filter,
-            if (view.sorts.isNotEmpty) 'sorts': view.sorts,
-          },
-        );
-        NotionClient.ensureSuccess(response, operation: '加载更多记录');
-        data = jsonDecode(response.body) as Map<String, dynamic>;
+        data = await _queryDataSourceRows(cursor: cursor);
         results = List<Map<String, dynamic>>.from(data['results'] ?? []);
       }
 
@@ -304,6 +292,42 @@ class _HomeScreenState extends State<HomeScreen> {
         (view) => view.id == _viewId,
         orElse: () => const DatabaseView(id: 'all', label: '全部'),
       );
+
+  Future<Map<String, dynamic>> _queryDataSourceRows({String? cursor}) async {
+    final view = _activeView;
+    if (view.filter != null) {
+      final response = await NotionClient.post(
+        '/data_sources/$_sourceId/query',
+        body: {
+          'page_size': 100,
+          if (cursor != null) 'start_cursor': cursor,
+          'filter': view.filter,
+        },
+      );
+      if (response.statusCode == 400) {
+        await AppLogger.log(
+          'Home',
+          '视图筛选不可用，改为查询全部记录: ${response.body}',
+        );
+      } else {
+        NotionClient.ensureSuccess(response, operation: '加载数据源记录');
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    }
+
+    final response = await NotionClient.post(
+      '/data_sources/$_sourceId/query',
+      body: {
+        'page_size': 100,
+        if (cursor != null) 'start_cursor': cursor,
+        'sorts': [
+          {'direction': 'descending', 'timestamp': 'last_edited_time'}
+        ],
+      },
+    );
+    NotionClient.ensureSuccess(response, operation: '加载数据源记录');
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
 
   Future<List<Map<String, dynamic>>> _hydrateViewResults(Object? results) async {
     if (results is! List) return const [];
