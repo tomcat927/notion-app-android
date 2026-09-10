@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<paths>
+    <paths>
+    <cache-path
+        name="webview_uploads"
+        path="."/>
     <cache-path
         name="apk_updates"
         path="apk_updates/"/>

@@ -196,6 +196,16 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       final newPath = p.join(tempDir.path, fileName);
       await sourceFile.copy(newPath);
 
+      try {
+        final chmod = await Process.run('chmod', ['644', newPath]);
+        await AppLogger.log(
+          'Browser',
+          'chmod 644: exit=${chmod.exitCode}, stderr=${chmod.stderr}',
+        );
+      } catch (error) {
+        await AppLogger.log('Browser', 'chmod 失败: $error');
+      }
+
       final copiedFile = File(newPath);
       await AppLogger.log(
         'Browser',
