@@ -98,7 +98,8 @@ class _HomeScreenState extends State<HomeScreen> {
             : null;
     final sourceId = selected?['id']?.toString() ?? '__recent__';
     final savedViewId = prefs.getString('selected_view_id:$sourceId');
-    final views = selected == null ? const [] : _buildViews(selected);
+    final views =
+        selected == null ? <DatabaseView>[] : _buildViews(selected);
 
     setState(() {
       _databases = results;
@@ -249,7 +250,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       for (final type in const ['status', 'select', 'multi_select']) {
-        Map<String, dynamic>? filterProperty;
+        Map<dynamic, dynamic>? filterProperty;
         String? propertyId;
         List? options;
 
@@ -515,9 +516,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-      body: Row(
-        child: _buildContent(),
-      ),
+      body: _buildContent(),
       bottomNavigationBar: showPage
           ? null
           : NavigationBar(
