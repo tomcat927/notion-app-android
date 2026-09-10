@@ -301,6 +301,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _selectView(String id) async {
+    if (id == _viewId) return;
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('selected_view_id:$_sourceId', id);
     if (!mounted) return;
