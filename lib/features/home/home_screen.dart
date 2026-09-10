@@ -43,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   bool _loadingMore = false;
   String? _error;
+  bool _creatingPage = false;
 
   List<Map<String, dynamic>> _databases = [];
   Map<String, dynamic>? _selectedSource;
@@ -562,6 +563,18 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
       body: _buildContent(),
+      floatingActionButton: _currentNavIndex == 0 && _selectedPage == null && _sourceId != '__recent__'
+          ? FloatingActionButton.extended(
+              onPressed: _creatingPage ? null : _createPage,
+              icon: _creatingPage
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.note_add_outlined),
+              label: Text(_creatingPage ? '创建中' : '新建页面'),
+            )
+          : null,
       bottomNavigationBar: showPage
           ? null
           : NavigationBar(
@@ -894,6 +907,102 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+  }
+
+  String? _titlePropertyName(Map<String, dynamic> source) {
+    final properties = source['properties'];
+    if (properties is! Map) return null;
+
+    for (final entry in properties.entries) {
+      final property = entry.value;
+      if (property is Map && property['type'] == 'title') {
+        return entry.key.toString();
+      }
+    }
+    return null;
+  }
+
+  Future<void> _createPage() async {
+    final source = _selectedSource;
+    if (source == null || _sourceId == '__recent__') return;
+
+    final titleProperty = _titlePropertyName(source);
+    if (titleProperty == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前数据源没有标题属性')),
+      );
+      return;
+    }
+
+    final controller = TextEditingController();
+    final title = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('新建页面 · $_sourceTitle'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: '页面标题',
+              hintText: '输入标题',
+            ),
+            onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(controller.text),
+              child: const Text('创建'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+
+    if (title == null || !mounted) return;
+    final trimmedTitle = title.trim();
+
+    setState(() => _creatingPage = true);
+    try {
+      final response = await NotionClient.post('/pages', body: {
+        'parent': {'data_source_id': _sourceId},
+        'properties': {
+          titleProperty: {
+            'title': [
+              {
+                'type': 'text',
+                'text': {'content': trimmedTitle.isEmpty ? '无标题' : trimmedTitle},
+              }
+            ],
+          },
+        },
+      });
+      NotionClient.ensureSuccess(response, operation: '创建页面');
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final page = Map<String, dynamic>.from(data);
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已创建：${_pageTitle(page)}')),
+      );
+      await _openPageInBrowser(page);
+      if (mounted) unawaited(_loadRows());
+    } catch (error) {
+      await AppLogger.log('Home', '创建页面失败: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('创建页面失败：$error')),
+      );
+    } finally {
+      if (mounted) setState(() => _creatingPage = false);
+    }
   }
 
   Future<void> _autoCheckForUpdates() async {
