@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -45,6 +46,13 @@ class UpdateService {
     'com.notion.app/updater',
   );
 
+  /// gh-proxy 和 GitHub 更新源可直连，绕过系统代理减少一跳延迟。
+  static http.Client _directClient() {
+    final httpClient = HttpClient();
+    httpClient.findProxy = (uri) => 'DIRECT';
+    return IOClient(httpClient);
+  }
+
   static Future<UpdateInfo?> checkForUpdate() async {
     final packageInfo = await PackageInfo.fromPlatform();
     final currentVersionCode = int.tryParse(packageInfo.buildNumber) ?? 0;
@@ -60,9 +68,11 @@ class UpdateService {
 
   static Future<UpdateInfo?> _checkFromManifest() async {
     try {
-      final response = await http
+      final client = _directClient();
+      final response = await client
           .get(Uri.parse(_manifestUrl))
           .timeout(const Duration(seconds: 20));
+      client.close();
       if (response.statusCode != 200) return null;
 
       final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map;
@@ -96,7 +106,8 @@ class UpdateService {
   }
 
   static Future<UpdateInfo?> _checkFromGitHubApi() async {
-    final response = await http
+    final client = _directClient();
+    final response = await client
         .get(
           Uri.parse(_apiUrl),
           headers: {
@@ -105,6 +116,7 @@ class UpdateService {
           },
         )
         .timeout(const Duration(seconds: 20));
+    client.close();
     if (response.statusCode != 200) {
       throw Exception('GitHub API HTTP ${response.statusCode}');
     }
@@ -190,7 +202,7 @@ class UpdateService {
     Object? lastError;
     for (final url in urls) {
       try {
-        final client = http.Client();
+        final client = _directClient();
         final request = http.Request('GET', Uri.parse(url));
         final response = await client
             .send(request)
@@ -233,9 +245,11 @@ class UpdateService {
   static Future<String?> _readChecksum(List<String> urls) async {
     for (final url in urls) {
       try {
-        final response = await http
+        final client = _directClient();
+        final response = await client
             .get(Uri.parse(url))
             .timeout(const Duration(seconds: 20));
+        client.close();
         if (response.statusCode != 200) continue;
 
         final value = utf8
