@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/notion_auth.dart';
@@ -906,6 +907,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: _openEditor,
                 ),
                 IconButton(
+                  icon: const Icon(Icons.open_in_new),
+                  tooltip: '在浏览器打开',
+                  onPressed: _openPageInExternalBrowser,
+                ),
+                IconButton(
                   icon: const Icon(Icons.refresh),
                   onPressed: () => _loadPageContent(_selectedPage!['id']),
                 ),
@@ -1370,6 +1376,24 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _openPageInExternalBrowser() async {
+    final pageId = _selectedPage?['id']?.toString();
+    if (pageId == null || pageId.isEmpty) return;
+
+    final pagePath = pageId.replaceAll('-', '');
+    final url = Uri.parse('https://www.notion.so/$pagePath');
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (error) {
+      await AppLogger.log('Home', '打开外部浏览器失败: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('无法打开浏览器')),
+        );
+      }
+    }
   }
 
   String? _titlePropertyName(Map<String, dynamic> source) {
