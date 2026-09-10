@@ -1,8 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+
+import '../../core/app_logger.dart';
 
 class NotionPageBrowserScreen extends StatefulWidget {
   const NotionPageBrowserScreen({
@@ -68,6 +72,32 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         ),
       )
       ..loadRequest(Uri.parse(NotionPageBrowserScreen.pageUrl(widget.pageId)));
+
+    if (_controller.platform is AndroidWebViewController) {
+      (_controller.platform as AndroidWebViewController)
+          .setOnShowFileSelector(_onShowFileSelector);
+    }
+  }
+
+  Future<List<String>> _onShowFileSelector(FileSelectorParams params) async {
+    final hasImage = params.acceptTypes.any(
+      (type) => type.startsWith('image/'),
+    );
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: hasImage ? FileType.image : FileType.any,
+        allowMultiple: params.mode == FileSelectorMode.openMultiple,
+      );
+      if (result == null) return const [];
+      return result.files
+          .where((file) => file.path != null)
+          .map((file) => file.path!)
+          .toList();
+    } catch (error) {
+      await AppLogger.log('Browser', '文件选择失败: $error');
+      return const [];
+    }
   }
 
   Future<void> _applyAppShell() async {
