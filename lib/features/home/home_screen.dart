@@ -44,6 +44,11 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loadingMore = false;
   String? _error;
   bool _creatingPage = false;
+  bool _searchActive = false;
+  String _searchQuery = '';
+  Timer? _searchDebounce;
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
 
   List<Map<String, dynamic>> _databases = [];
   Map<String, dynamic>? _selectedSource;
@@ -57,6 +62,14 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _hasMore = false;
   Map<String, dynamic>? _selectedPage;
   List<dynamic>? _pageBlocks;
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -227,7 +240,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<Map<String, dynamic>> _loadRowsPage({String? cursor}) async {
     if (_sourceId == '__recent__') {
+      final query = _searchQuery.trim();
       final response = await NotionClient.post('/search', body: {
+        if (query.isNotEmpty) 'query': query,
         'filter': {'property': 'object', 'value': 'page'},
         'sort': {
           'direction': 'descending',
@@ -276,8 +291,34 @@ class _HomeScreenState extends State<HomeScreen> {
     return value.replaceAll('-', '').toLowerCase();
   }
 
+  Map<String, dynamic>? _searchTitleFilter() {
+    final query = _searchQuery.trim();
+    if (query.isEmpty) return null;
+
+    final source = _selectedSource;
+    final titleProperty = source == null ? null : _titlePropertyName(source);
+    if (titleProperty == null) return null;
+
+    return {
+      'property': titleProperty,
+      'title': {'contains': query},
+    };
+  }
+
+  Map<String, dynamic>? _combinedFilter(DatabaseView view) {
+    final viewFilter = view.filter;
+    final searchFilter = _searchTitleFilter();
+    if (searchFilter == null) return viewFilter;
+    if (viewFilter == null) return searchFilter;
+
+    return {
+      'and': [viewFilter, searchFilter],
+    };
+  }
+
   Future<Map<String, dynamic>> _queryDataSourceRows({String? cursor}) async {
     final view = _activeView;
+    final filter = _combinedFilter(view);
     final sorts = _sanitizeSorts(view.sorts);
 
     Future<Map<String, dynamic>?> request({
@@ -289,7 +330,7 @@ class _HomeScreenState extends State<HomeScreen> {
         body: {
           'page_size': 100,
           if (cursor != null) 'start_cursor': cursor,
-          if (useFilter && view.filter != null) 'filter': view.filter,
+          if (useFilter && filter != null) 'filter': filter,
           if (useSorts && sorts.isNotEmpty) 'sorts': sorts,
           if (!useFilter && !useSorts)
             'sorts': [
@@ -310,7 +351,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
 
-    if (view.filter != null) {
+    if (filter != null) {
       final filtered = await request(useFilter: true, useSorts: true);
       if (filtered != null) return filtered;
 
@@ -352,6 +393,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _selectedSource = database;
       _sourceTitle = _databaseTitle(database);
       _viewId = 'all';
+      _clearSearch(immediate: true);
     });
     await _loadViews();
     await _loadRows();
@@ -366,6 +408,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _sourceTitle = '最近页面';
       _views = const [];
       _viewId = 'all';
+      _clearSearch(immediate: true);
     });
     await _loadRows();
   }
@@ -378,6 +421,45 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     setState(() => _viewId = id);
     await _loadRows();
+  }
+
+  void _clearSearch({bool immediate = false}) {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    _searchQuery = '';
+    if (immediate) return;
+    unawaited(_loadRows());
+  }
+
+  void _openSearch() {
+    setState(() => _searchActive = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    setState(() => _searchActive = false);
+    _searchFocus.unfocus();
+    if (_searchQuery.isNotEmpty) _clearSearch();
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      final query = value.trim();
+      if (query == _searchQuery) return;
+      _searchQuery = query;
+      unawaited(_loadRows());
+    });
+  }
+
+  void _submitSearch() {
+    _searchDebounce?.cancel();
+    final query = _searchController.text.trim();
+    if (query == _searchQuery) return;
+    _searchQuery = query;
+    unawaited(_loadRows());
   }
 
   Future<void> _loadPageContent(String pageId) async {
@@ -545,22 +627,87 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             )
           : AppBar(
-              title: const Text('Notion App'),
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  tooltip: '刷新',
-                  onPressed: _loadRows,
-                ),
-                PopupMenuButton<String>(
-                  onSelected: (value) {
-                    if (value == 'logout') _logout();
-                  },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(value: 'logout', child: Text('退出登录')),
-                  ],
-                ),
-              ],
+              titleSpacing: 0,
+              title: _searchActive
+                  ? TextField(
+                      controller: _searchController,
+                      focusNode: _searchFocus,
+                      onChanged: _onSearchChanged,
+                      onSubmitted: (_) => _submitSearch(),
+                      textInputAction: TextInputAction.search,
+                      decoration: const InputDecoration(
+                        hintText: '搜索当前数据库',
+                        border: InputBorder.none,
+                        prefixIcon: Icon(Icons.search),
+                        isDense: true,
+                      ),
+                    )
+                  : InkWell(
+                      onTap: _showDatabasePicker,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.dataset_outlined, size: 18),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                _sourceTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.expand_more, size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+              actions: _searchActive
+                  ? [
+                      if (_searchController.text.isNotEmpty)
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          tooltip: '清空搜索',
+                          onPressed: () {
+                            _searchController.clear();
+                            _clearSearch();
+                          },
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.arrow_forward),
+                        tooltip: '退出搜索',
+                        onPressed: _closeSearch,
+                      ),
+                    ]
+                  : [
+                      IconButton(
+                        icon: const Icon(Icons.search),
+                        tooltip: '搜索',
+                        onPressed: _openSearch,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.refresh),
+                        tooltip: '刷新',
+                        onPressed: _loadRows,
+                      ),
+                      PopupMenuButton<String>(
+                        onSelected: (value) {
+                          if (value == 'logout') _logout();
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'logout',
+                            child: Text('退出登录'),
+                          ),
+                        ],
+                      ),
+                    ],
             ),
       body: _buildContent(),
       floatingActionButton: _currentNavIndex == 0 && _selectedPage == null && _sourceId != '__recent__'
@@ -608,9 +755,8 @@ class _HomeScreenState extends State<HomeScreen> {
       onRefresh: _loadRows,
       child: CustomScrollView(
         slivers: [
-          SliverToBoxAdapter(child: _buildDatabaseHeader()),
           if (_views.length > 1) SliverToBoxAdapter(child: _buildViewBar()),
-          const SliverToBoxAdapter(child: SizedBox(height: 4)),
+          const SliverToBoxAdapter(child: SizedBox(height: 8)),
           if (_loading)
             const SliverFillRemaining(
               hasScrollBody: false,
@@ -650,7 +796,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
                     SizedBox(height: 16),
-                    Text('这个视图里没有记录'),
+                    Text(
+                      _searchQuery.isEmpty ? '这个视图里没有记录' : '没有匹配的页面',
+                    ),
                     SizedBox(height: 8),
                     Text(
                       '请确认集成已关联到当前数据库',
@@ -705,39 +853,6 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildDatabaseHeader() {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Material(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: _showDatabasePicker,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                const Icon(Icons.dataset_outlined, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _sourceTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall,
-                  ),
-                ),
-                const Icon(Icons.expand_more, size: 20),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
