@@ -3,26 +3,24 @@ name: Build & Release
 on:
   push:
     branches:
-      - develop
       - main
-  pull_request:
-    branches: [develop]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   FLUTTER_VERSION: '3.24.0'
-  APP_VERSION: '0.0.1'
+  APP_VERSION: '0.1.0'
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
-    outputs:
-      version_code: ${{ steps.version.outputs.code }}
-      release_tag: ${{ steps.version.outputs.tag }}
-      is_release: ${{ steps.version.outputs.is_release }}
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -31,22 +29,11 @@ jobs:
       - name: Generate version info
         id: version
         run: |
-          TIMESTAMP=$(TZ='Asia/Shanghai' date +%Y%m%d%H%M%S)
-
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            # Release build
-            TAG="v${{ env.APP_VERSION }}"
-            IS_RELEASE="true"
-          else
-            # Test build (develop / manual)
-            TAG="test-v${{ env.APP_VERSION }}-$TIMESTAMP"
-            IS_RELEASE="false"
-          fi
-
-          echo "code=$TIMESTAMP" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
-          echo "Release tag: $TAG"
+          VERSION_CODE=$(date +%s)
+          TAG="v${APP_VERSION}-${VERSION_CODE}"
+          echo "code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Generated ${TAG} (versionCode: ${VERSION_CODE})"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -67,25 +54,108 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Decode signing keystore
+        id: keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PATH: ${{ runner.temp }}/notion-app.jks
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次 APK 将使用 debug 签名，无法覆盖安装正式签名版本。"
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          echo "path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
+
       - name: Update version
         run: |
-          sed -i "s/version: .*/version: 0.0.1+${{ steps.version.outputs.code }}/" pubspec.yaml
+          sed -i "s/version: .*/version: ${APP_VERSION}+${{ steps.version.outputs.code }}/" pubspec.yaml
           cat pubspec.yaml
 
       - name: Build APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: flutter build apk --release
 
-      - name: Rename APK
-        run: |
-          mv build/app/outputs/flutter-apk/app-release.apk "notion-app-${{ steps.version.outputs.tag }}.apk"
-
-      - name: Create Release & Upload APK
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.is_release == 'true' && format('v{0}', env.APP_VERSION) || format('Test v{0} ({1})', env.APP_VERSION, steps.version.outputs.code) }}
-          prerelease: ${{ steps.version.outputs.is_release != 'true' }}
-          files: notion-app-${{ steps.version.outputs.tag }}.apk
-          generate_release_notes: true
+      - name: Prepare release assets
+        id: assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          APK_NAME="notion-app-${TAG}.apk"
+          CHECKSUM_NAME="${APK_NAME}.sha256"
+          cp build/app/outputs/flutter-apk/app-release.apk "$APK_NAME"
+          sha256sum "$APK_NAME" > "$CHECKSUM_NAME"
+
+          GITHUB_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${APK_NAME}"
+          PROXY_URL="https://gh-proxy.com/${GITHUB_URL}"
+          GITHUB_CHECKSUM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${CHECKSUM_NAME}"
+          PROXY_CHECKSUM_URL="https://gh-proxy.com/${GITHUB_CHECKSUM_URL}"
+          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+          cat > latest.json <<EOF
+          {
+            "tag_name": "${TAG}",
+            "version_code": ${{ steps.version.outputs.code }},
+            "apk": "${PROXY_URL}",
+            "github_apk": "${GITHUB_URL}",
+            "apk_sha256": "${PROXY_CHECKSUM_URL}",
+            "github_apk_sha256": "${GITHUB_CHECKSUM_URL}",
+            "release_url": "${RELEASE_URL}",
+            "release_notes": "更新包优先通过 GitHub 代理下载，校验通过后启动系统安装器。"
+          }
+          EOF
+
+          echo "apk=${APK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "checksum=${CHECKSUM_NAME}" >> "$GITHUB_OUTPUT"
+          echo "github_url=${GITHUB_URL}" >> "$GITHUB_OUTPUT"
+          echo "proxy_url=${PROXY_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          APK_NAME: ${{ steps.assets.outputs.apk }}
+          CHECKSUM_NAME: ${{ steps.assets.outputs.checksum }}
+          GITHUB_URL: ${{ steps.assets.outputs.github_url }}
+          PROXY_URL: ${{ steps.assets.outputs.proxy_url }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          cat > release-notes.md <<EOF
+          ## Android APK 下载
+
+          - [国内加速下载](${PROXY_URL})
+          - [GitHub 原始下载](${GITHUB_URL})
+
+          ## 文件校验
+
+          - 文件：\`${APK_NAME}\`
+          - SHA-256：见 \`${CHECKSUM_NAME}\`
+
+          如果加速地址不可用，应用会自动切换到 GitHub 原始下载地址。
+          EOF
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            "$APK_NAME" "$CHECKSUM_NAME" "latest.json"
+
+      - name: Cleanup old releases (keep 10)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t RELEASES < <(gh release list --limit 100 --json tagName,createdAt --jq '.[] | "\(.createdAt) \(.tagName)"' | sort -r)
+          TOTAL=${#RELEASES[@]}
+          echo "Found $TOTAL releases; keeping 10"
+          for ((i=10; i<TOTAL; i++)); do
+            OLD_TAG=$(echo "${RELEASES[$i]}" | awk '{print $2}')
+            echo "Deleting release and tag: $OLD_TAG"
+            gh release delete "$OLD_TAG" --yes --cleanup-tag || echo "Failed to delete $OLD_TAG"
+          done

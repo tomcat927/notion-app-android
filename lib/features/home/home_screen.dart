@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/notion_auth.dart';
 import '../../core/notion_client.dart';
 import '../../core/app_logger.dart';
+import '../../core/update_service.dart';
 import '../auth/login_screen.dart';
 import '../browser/notion_page_browser_screen.dart';
 import '../editor/editor_screen.dart';
@@ -33,6 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _fetchPages();
+    unawaited(_autoCheckForUpdates());
   }
 
   Future<void> _fetchPages() async {
@@ -475,11 +479,30 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _autoCheckForUpdates() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool(UpdateService.autoUpdatePreferenceKey) ?? true)) {
+      return;
+    }
+
+    try {
+      final updateInfo = await UpdateService.checkForUpdate();
+      if (updateInfo == null || !mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('发现新版本：${updateInfo.tagName}，可在设置中更新')),
+      );
+    } catch (_) {
+      // A failed background update check must not interrupt normal startup.
+    }
+  }
+
   Widget _buildSettings() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const UpdateSection(),
+          const SizedBox(height: 8),
+          Card(
           child: SwitchListTile(
             title: const Text('调试日志'),
             subtitle: const Text('开启后将 API 请求和错误写入设备日志文件'),

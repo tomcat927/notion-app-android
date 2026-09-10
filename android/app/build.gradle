@@ -30,6 +30,11 @@ if (flutterVersionName == null) {
     flutterVersionName = "1.0"
 }
 
+def keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+def keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+def keystoreAlias = System.getenv("ANDROID_KEY_ALIAS")
+def keystoreKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+
 android {
     namespace = "com.notion.app"
     compileSdk = flutter.compileSdkVersion
@@ -52,9 +57,22 @@ android {
         versionName = flutterVersionName
     }
 
+    signingConfigs {
+        release {
+            if (keystorePath != null && !keystorePath.isBlank()) {
+                storeFile = file(keystorePath)
+                storePassword = keystorePassword
+                keyAlias = keystoreAlias
+                keyPassword = keystoreKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.debug
+            signingConfig = (keystorePath != null && !keystorePath.isBlank())
+                    ? signingConfigs.release
+                    : signingConfigs.debug
         }
     }
 }
