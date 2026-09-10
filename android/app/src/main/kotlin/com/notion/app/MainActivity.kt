@@ -1,15 +1,22 @@
 package com.notion.app
 
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.ProxyInfo
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.webkit.ProxyConfig
+import androidx.webkit.ProxyController
+import androidx.webkit.WebViewFeature
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -22,6 +29,55 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.notion.app/proxy")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getSystemProxy" -> result.success(getSystemProxy())
+                    else -> result.notImplemented()
+                }
+            }
+
+        applyWebViewProxy()
+    }
+
+    private fun getSystemProxy(): Map<String, String?> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return mapOf("host" to null, "port" to null)
+        }
+
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val proxy = connectivityManager?.defaultProxy
+        val host = proxy?.host
+        val port = proxy?.port?.toString()
+
+        return mapOf("host" to host, "port" to port)
+    }
+
+    private fun applyWebViewProxy() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return
+
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val proxy = connectivityManager?.defaultProxy
+        val host = proxy?.host ?: return
+        val port = proxy?.port ?: return
+
+        try {
+            val proxyConfig = ProxyConfig.Builder()
+                .addProxyRule("$host:$port")
+                .build()
+
+            ProxyController.getInstance().setProxyOverride(
+                proxyConfig,
+                Executors.newSingleThreadExecutor(),
+                Runnable {},
+            )
+        } catch (_: Exception) {
+            // WebView proxy support is best-effort; the page can still load directly.
+        }
     }
 
     private fun installUpdate(path: String?, result: MethodChannel.Result) {

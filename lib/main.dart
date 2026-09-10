@@ -6,11 +6,13 @@ import 'package:notion_app/app/theme/app_theme.dart';
 import 'package:notion_app/features/home/home_screen.dart';
 import 'package:notion_app/features/auth/login_screen.dart';
 import 'package:notion_app/core/notion_auth.dart';
+import 'package:notion_app/core/network_proxy.dart';
 
 import 'package:notion_app/core/app_logger.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await NetworkProxy.initialize();
   await SharedPreferences.getInstance();
   await AppLogger.init();
 
