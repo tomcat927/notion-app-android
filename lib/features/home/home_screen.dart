@@ -1039,17 +1039,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         tooltip: '刷新',
                         onPressed: _loadRows,
                       ),
-                      PopupMenuButton<String>(
-                        onSelected: (value) {
-                          if (value == 'logout') _logout();
-                        },
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 'logout',
-                            child: Text('退出登录'),
-                          ),
-                        ],
-                      ),
                     ],
             ),
       body: _buildContent(),
@@ -1448,6 +1437,29 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _confirmLogout() async {
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('退出登录'),
+        content: const Text('退出后需要重新输入 Token 才能访问你的 Notion。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('退出'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _logout();
+  }
+
   String? _titlePropertyName(Map<String, dynamic> source) {
     final properties = source['properties'];
     if (properties is! Map) return null;
@@ -1587,6 +1599,14 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('查看调试日志'),
             trailing: const Icon(Icons.chevron_right),
             onTap: _showDebugLogs,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: const Text('退出登录', style: TextStyle(color: Colors.red)),
+            onTap: _confirmLogout,
           ),
         ),
       ],
