@@ -19,6 +19,11 @@ class NotionPageBrowserScreen extends StatefulWidget {
     return 'https://www.notion.so/$compactId';
   }
 
+  static const String _desktopUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+      'AppleWebKit/537.36 (KHTML, like Gecko) '
+      'Chrome/141.0.0.0 Safari/537.36';
+
   @override
   State<NotionPageBrowserScreen> createState() =>
       _NotionPageBrowserScreenState();
@@ -35,6 +40,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setUserAgent(NotionPageBrowserScreen._desktopUserAgent)
       ..setBackgroundColor(Theme.of(context).scaffoldBackgroundColor)
       ..setNavigationDelegate(
         NavigationDelegate(
