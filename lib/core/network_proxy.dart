@@ -41,7 +41,7 @@ class NetworkProxy {
 }
 
 class _ProxiedHttpOverrides extends HttpOverrides {
-  const _ProxiedHttpOverrides(this.host, this.port);
+  _ProxiedHttpOverrides(this.host, this.port);
 
   final String host;
   final String port;
