@@ -111,6 +111,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         }
         final copied = await _copyToWebViewTemp(image.path);
         if (copied == null) return const [];
+        _scheduleFileInputDiagnostic();
         return [copied];
       } catch (error) {
         await AppLogger.log('Browser', '图片选择失败: $error');
@@ -129,11 +130,34 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
           .map((file) => file.path!)
           .toList();
       await AppLogger.log('Browser', '选中文件: $paths');
+      _scheduleFileInputDiagnostic();
       return paths;
     } catch (error) {
       await AppLogger.log('Browser', '文件选择失败: $error');
       return const [];
     }
+  }
+
+  /// 延迟检查 file input 是否真的收到了文件，用于排查上传失败原因。
+  void _scheduleFileInputDiagnostic() {
+    Future.delayed(const Duration(seconds: 2), () async {
+      if (!mounted) return;
+      try {
+        final result = await _controller.runJavaScriptReturningResult('''
+JSON.stringify(
+  Array.from(document.querySelectorAll('input[type="file"]')).map(function(i) {
+    return {
+      files: i.files.length,
+      names: Array.from(i.files).map(function(f) { return f.name + ':' + f.size; })
+    };
+  })
+)
+''');
+        await AppLogger.log('Browser', 'file input 状态: $result');
+      } catch (error) {
+        await AppLogger.log('Browser', 'file input 检查失败: $error');
+      }
+    });
   }
 
   /// image_picker 会把文件复制到 cache 的 UUID 子目录里，
