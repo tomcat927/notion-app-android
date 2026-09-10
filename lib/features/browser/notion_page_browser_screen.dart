@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -84,9 +85,25 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       (type) => type.startsWith('image/'),
     );
 
+    if (hasImage) {
+      try {
+        final picker = ImagePicker();
+        if (params.mode == FileSelectorMode.openMultiple) {
+          final images = await picker.pickMultiImage();
+          return images.map((image) => image.path).toList();
+        }
+        final image = await picker.pickImage(source: ImageSource.gallery);
+        if (image == null) return const [];
+        return [image.path];
+      } catch (error) {
+        await AppLogger.log('Browser', '图片选择失败: $error');
+        return const [];
+      }
+    }
+
     try {
       final result = await FilePicker.platform.pickFiles(
-        type: hasImage ? FileType.image : FileType.any,
+        type: FileType.any,
         allowMultiple: params.mode == FileSelectorMode.openMultiple,
       );
       if (result == null) return const [];
