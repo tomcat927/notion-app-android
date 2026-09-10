@@ -12,6 +12,7 @@ import '../../core/update_service.dart';
 import '../auth/login_screen.dart';
 import '../browser/notion_page_browser_screen.dart';
 import '../editor/editor_screen.dart';
+import '../settings/update_section.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});

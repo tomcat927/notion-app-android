@@ -38,7 +38,7 @@ class UpdateService {
   static const String _repository = 'notion-app-android';
   static const String _proxyPrefix = 'https://gh-proxy.com/';
   static const String _manifestUrl =
-      '$_proxyPrefixhttps://github.com/$_owner/$_repository/releases/latest/download/latest.json';
+      'https://gh-proxy.com/https://github.com/tomcat927/notion-app-android/releases/latest/download/latest.json';
   static const String _apiUrl =
       'https://api.github.com/repos/$_owner/$_repository/releases/latest';
   static const MethodChannel _installChannel = MethodChannel(

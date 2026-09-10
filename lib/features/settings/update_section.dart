@@ -68,6 +68,8 @@ class _UpdateSectionState extends State<UpdateSection> {
 
     final progress = ValueNotifier<double>(0);
     var dialogOpen = true;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
     showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -95,22 +97,20 @@ class _UpdateSectionState extends State<UpdateSection> {
       final file = await UpdateService.downloadAndVerify(updateInfo, (value) {
         progress.value = value.clamp(0.0, 1.0);
       });
-      if (dialogOpen && context.mounted) {
+      if (dialogOpen) {
         dialogOpen = false;
-        Navigator.of(context).pop();
+        navigator.pop();
       }
       await UpdateService.installApk(file);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         const SnackBar(content: Text('已启动系统安装器')),
       );
     } catch (_) {
-      if (dialogOpen && context.mounted) {
+      if (dialogOpen) {
         dialogOpen = false;
-        Navigator.of(context).pop();
+        navigator.pop();
       }
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         const SnackBar(content: Text('更新失败')),
       );
     } finally {
