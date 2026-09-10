@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -38,6 +39,10 @@ class NotionPageBrowserScreen extends StatefulWidget {
 }
 
 class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
+  static const MethodChannel _webViewChannel = MethodChannel(
+    'com.notion.app/webview',
+  );
+
   late final WebViewController _controller;
   double _progress = 0;
   bool _hasError = false;
@@ -51,6 +56,12 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       ..setUserAgent(NotionPageBrowserScreen._mobileUserAgent)
       ..enableZoom(true)
       ..setBackgroundColor(Theme.of(context).scaffoldBackgroundColor)
+      ..addJavaScriptChannel(
+        'NotionFileUpload',
+        onMessageReceived: (message) {
+          unawaited(_handleFileUploadRequest(message.message));
+        },
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (progress) {
@@ -59,6 +70,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
           onNavigationRequest: _handleNavigation,
           onPageFinished: (_) {
             unawaited(_applyAppShell());
+            unawaited(_injectFileInterceptor());
             if (mounted && _hasError) {
               setState(() {
                 _hasError = false;
@@ -132,9 +144,15 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
           .where((file) => file.path != null)
           .map((file) => file.path!)
           .toList();
+      final contentUris = <String>[];
+      for (final path in paths) {
+        final uri = await _toContentUri(path);
+        contentUris.add(uri ?? path);
+      }
       await AppLogger.log('Browser', '选中文件: $paths');
+      await AppLogger.log('Browser', 'content URIs: $contentUris');
       _scheduleFileInputDiagnostic();
-      return paths;
+      return contentUris;
     } catch (error) {
       await AppLogger.log('Browser', '文件选择失败: $error');
       return const [];
@@ -211,11 +229,28 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         'Browser',
         '文件已复制: $newPath, 大小: ${copiedFile.lengthSync()}',
       );
-      return newPath;
+      return await _toContentUri(newPath) ?? newPath;
     } catch (error) {
       await AppLogger.log('Browser', '复制文件失败: $error');
       return null;
     }
+  }
+
+  /// 将文件路径转为 content:// URI，绕过 WebView 的 file:// 访问限制。
+  Future<String?> _toContentUri(String filePath) async {
+    try {
+      final uri = await _webViewChannel.invokeMethod<String>(
+        'getFileUri',
+        {'path': filePath},
+      );
+      if (uri != null && uri.isNotEmpty) {
+        await AppLogger.log('Browser', 'content URI: $uri');
+        return uri;
+      }
+    } catch (error) {
+      await AppLogger.log('Browser', '获取 content URI 失败: $error');
+    }
+    return null;
   }
 
   Future<void> _applyAppShell() async {

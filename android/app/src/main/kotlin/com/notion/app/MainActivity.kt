@@ -38,6 +38,14 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.notion.app/webview")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getFileUri" -> getFileUri(call.argument<String>("path"), result)
+                    else -> result.notImplemented()
+                }
+            }
+
         applyWebViewProxy()
     }
 
@@ -53,6 +61,26 @@ class MainActivity : FlutterActivity() {
         val port = proxy?.port?.toString()
 
         return mapOf("host" to host, "port" to port)
+    }
+
+    private fun getFileUri(path: String?, result: MethodChannel.Result) {
+        if (path.isNullOrBlank()) {
+            result.error("invalid_argument", "缺少文件路径", null)
+            return
+        }
+
+        val file = File(path)
+        if (!file.isFile) {
+            result.error("file_not_found", "文件不存在: $path", null)
+            return
+        }
+
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            result.success(uri.toString())
+        } catch (error: Exception) {
+            result.error("file_uri_failed", error.message ?: "无法生成 content URI", null)
+        }
     }
 
     private fun applyWebViewProxy() {
