@@ -13,6 +13,7 @@ class UpdateSection extends StatefulWidget {
 class _UpdateSectionState extends State<UpdateSection> {
   bool _autoUpdate = true;
   bool _directUpdate = true;
+  bool _settingsLoaded = false;
   bool _checking = false;
   UpdateInfo? _updateInfo;
   String? _message;
@@ -33,6 +34,7 @@ class _UpdateSectionState extends State<UpdateSection> {
     setState(() {
       _autoUpdate = autoUpdate;
       _directUpdate = directUpdate;
+      _settingsLoaded = true;
     });
   }
 
@@ -139,17 +141,19 @@ class _UpdateSectionState extends State<UpdateSection> {
     return Card(
       child: Column(
         children: [
-          SwitchListTile(
-            title: const Text('自动检查更新'),
-            value: _autoUpdate,
-            onChanged: _setAutoUpdate,
-          ),
-          SwitchListTile(
-            title: const Text('更新直连'),
-            subtitle: const Text('开启后热更新绕过系统代理直接下载'),
-            value: _directUpdate,
-            onChanged: _setDirectUpdate,
-          ),
+          if (_settingsLoaded) ...[
+            SwitchListTile(
+              title: const Text('自动检查更新'),
+              value: _autoUpdate,
+              onChanged: _setAutoUpdate,
+            ),
+            SwitchListTile(
+              title: const Text('更新直连'),
+              subtitle: const Text('开启后热更新绕过系统代理直接下载'),
+              value: _directUpdate,
+              onChanged: _setDirectUpdate,
+            ),
+          ],
           if (_updateInfo != null) ...[
             ListTile(
               leading: const Icon(Icons.system_update),
