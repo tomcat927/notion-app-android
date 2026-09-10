@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -84,16 +85,34 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     final hasImage = params.acceptTypes.any(
       (type) => type.startsWith('image/'),
     );
+    await AppLogger.log(
+      'Browser',
+      '文件选择器: mode=${params.mode}, acceptTypes=${params.acceptTypes}, hasImage=$hasImage',
+    );
 
     if (hasImage) {
       try {
         final picker = ImagePicker();
         if (params.mode == FileSelectorMode.openMultiple) {
           final images = await picker.pickMultiImage();
+          for (final image in images) {
+            await AppLogger.log(
+              'Browser',
+              '选中图片: ${image.path}, 存在: ${File(image.path).existsSync()}',
+            );
+          }
           return images.map((image) => image.path).toList();
         }
         final image = await picker.pickImage(source: ImageSource.gallery);
-        if (image == null) return const [];
+        if (image == null) {
+          await AppLogger.log('Browser', '图片选择取消');
+          return const [];
+        }
+        final file = File(image.path);
+        await AppLogger.log(
+          'Browser',
+          '选中图片: ${image.path}, 存在: ${file.existsSync()}, 大小: ${file.existsSync() ? file.lengthSync() : 0}',
+        );
         return [image.path];
       } catch (error) {
         await AppLogger.log('Browser', '图片选择失败: $error');
@@ -107,10 +126,12 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         allowMultiple: params.mode == FileSelectorMode.openMultiple,
       );
       if (result == null) return const [];
-      return result.files
+      final paths = result.files
           .where((file) => file.path != null)
           .map((file) => file.path!)
           .toList();
+      await AppLogger.log('Browser', '选中文件: $paths');
+      return paths;
     } catch (error) {
       await AppLogger.log('Browser', '文件选择失败: $error');
       return const [];
