@@ -19,10 +19,10 @@ class NotionPageBrowserScreen extends StatefulWidget {
     return 'https://www.notion.so/$compactId';
   }
 
-  static const String _desktopUserAgent =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+  static const String _mobileUserAgent =
+      'Mozilla/5.0 (Linux; Android 10; K) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
-      'Chrome/141.0.0.0 Safari/537.36';
+      'Chrome/141.0.0.0 Mobile Safari/537.36';
 
   @override
   State<NotionPageBrowserScreen> createState() =>
@@ -38,9 +38,10 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
+      _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setUserAgent(NotionPageBrowserScreen._desktopUserAgent)
+      ..setUserAgent(NotionPageBrowserScreen._mobileUserAgent)
+      ..enableZoom(true)
       ..setBackgroundColor(Theme.of(context).scaffoldBackgroundColor)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -49,6 +50,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
           },
           onNavigationRequest: _handleNavigation,
           onPageFinished: (_) {
+            unawaited(_applyAppShell());
             if (mounted && _hasError) {
               setState(() {
                 _hasError = false;
@@ -66,6 +68,42 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         ),
       )
       ..loadRequest(Uri.parse(NotionPageBrowserScreen.pageUrl(widget.pageId)));
+  }
+
+  Future<void> _applyAppShell() async {
+    await _controller.runJavaScript('''
+(() => {
+  const styleId = 'notion-app-shell-style';
+  let style = document.getElementById(styleId);
+  if (!style) {
+    style = document.createElement('style');
+    style.id = styleId;
+    document.head.appendChild(style);
+  }
+
+  style.textContent = `
+    html, body {
+      width: 100% !important;
+      max-width: 100vw !important;
+      overflow-x: hidden !important;
+    }
+    .notion-sidebar-container,
+    .notion-sidebar {
+      display: none !important;
+    }
+    .notion-frame,
+    .notion-scroller.vertical,
+    .notion-page-content {
+      width: 100% !important;
+      max-width: 100vw !important;
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+      padding-left: 16px !important;
+      padding-right: 16px !important;
+    }
+  `;
+})();
+''');
   }
 
   NavigationDecision _handleNavigation(NavigationRequest request) {
