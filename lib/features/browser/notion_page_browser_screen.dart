@@ -56,12 +56,6 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       ..setUserAgent(NotionPageBrowserScreen._mobileUserAgent)
       ..enableZoom(true)
       ..setBackgroundColor(Theme.of(context).scaffoldBackgroundColor)
-      ..addJavaScriptChannel(
-        'NotionFileUpload',
-        onMessageReceived: (message) {
-          unawaited(_handleFileUploadRequest(message.message));
-        },
-      )
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (progress) {
@@ -70,7 +64,6 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
           onNavigationRequest: _handleNavigation,
           onPageFinished: (_) {
             unawaited(_applyAppShell());
-            unawaited(_injectFileInterceptor());
             if (mounted && _hasError) {
               setState(() {
                 _hasError = false;
