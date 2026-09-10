@@ -20,7 +20,7 @@ class NotionClient {
 
     return {
       'Authorization': 'Bearer $token',
-      'Notion-Version': '2022-06-28',
+      'Notion-Version': '2026-03-11',
       'Content-Type': 'application/json',
     };
   }

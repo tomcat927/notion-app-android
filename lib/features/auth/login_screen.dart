@@ -38,7 +38,7 @@ class _LoginScreenState extends State<LoginScreen> {
         Uri.parse('https://api.notion.com/v1/users/me'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Notion-Version': '2022-06-28',
+          'Notion-Version': '2026-03-11',
         },
       );
 

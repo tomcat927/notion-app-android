@@ -68,6 +68,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       await _loadDatabases();
+      if (_sourceId != '__recent__') {
+        await _loadViews();
+      }
       await _loadRows();
     } catch (error) {
       if (!mounted) return;
@@ -80,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadDatabases() async {
     final response = await NotionClient.post('/search', body: {
-      'filter': {'property': 'object', 'value': 'database'},
+      'filter': {'property': 'object', 'value': 'data_source'},
       'sort': {'direction': 'descending', 'timestamp': 'last_edited_time'},
       'page_size': 100,
     });
@@ -89,7 +92,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
     final prefs = await SharedPreferences.getInstance();
-    final savedId = prefs.getString('selected_database_id');
+    final savedId = prefs.getString('selected_data_source_id');
     final savedExists = results.any((db) => db['id'] == savedId);
     final selected = savedExists
         ? results.firstWhere((db) => db['id'] == savedId)
@@ -106,12 +109,59 @@ class _HomeScreenState extends State<HomeScreen> {
       _sourceId = sourceId;
       _sourceTitle = selected == null ? '最近页面' : _databaseTitle(selected);
       _views = views;
-      _viewId = views.any((view) => view.id == savedViewId)
-          ? savedViewId!
-          : 'all';
+      _viewId = 'all';
     });
 
-    await prefs.setString('selected_database_id', _sourceId);
+    await prefs.setString('selected_data_source_id', _sourceId);
+  }
+
+  Future<void> _loadViews() async {
+    final encodedSourceId = Uri.encodeQueryComponent(_sourceId);
+    final response = await NotionClient.get(
+      '/views?data_source_id=$encodedSourceId&page_size=100',
+    );
+    NotionClient.ensureSuccess(response, operation: '获取视图');
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final references = List<Map<String, dynamic>>.from(data['results'] ?? []);
+    final views = <DatabaseView>[];
+
+    for (final reference in references) {
+      final viewId = reference['id']?.toString();
+      if (viewId == null || viewId.isEmpty) continue;
+
+      final detailResponse = await NotionClient.get('/views/$viewId');
+      NotionClient.ensureSuccess(detailResponse, operation: '读取视图详情');
+      final detail =
+          jsonDecode(detailResponse.body) as Map<String, dynamic>;
+      final name = detail['name']?.toString() ?? '';
+      final type = detail['type']?.toString() ?? 'view';
+      final filter = detail['filter'];
+      final sorts = detail['sorts'];
+
+      views.add(DatabaseView(
+        id: viewId,
+        label: name.isEmpty ? type : name,
+        filter: filter is Map<String, dynamic> ? filter : null,
+        sorts: sorts is List
+            ? List<Map<String, dynamic>>.from(sorts)
+            : const [],
+      ));
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _views = views.isEmpty
+          ? const [
+              DatabaseView(id: 'all', label: '全部', sorts: [
+                {'direction': 'descending', 'timestamp': 'last_edited_time'}
+              ])
+            ]
+          : views;
+      _viewId = _views.any((view) => view.id == _viewId)
+          ? _viewId
+          : _views.first.id;
+    });
   }
 
   Future<void> _loadRows() async {
@@ -134,7 +184,7 @@ class _HomeScreenState extends State<HomeScreen> {
               },
               'page_size': 100,
             })
-          : await NotionClient.post('/databases/$_sourceId/query', body: {
+          : await NotionClient.post('/data_sources/$_sourceId/query', body: {
               'page_size': 100,
               if (view.filter != null) 'filter': view.filter,
               if (view.sorts.isNotEmpty) 'sorts': view.sorts,
@@ -176,7 +226,7 @@ class _HomeScreenState extends State<HomeScreen> {
               'page_size': 100,
               'start_cursor': cursor,
             })
-          : await NotionClient.post('/databases/$_sourceId/query', body: {
+          : await NotionClient.post('/data_sources/$_sourceId/query', body: {
               'page_size': 100,
               'start_cursor': cursor,
               if (view.filter != null) 'filter': view.filter,
@@ -222,100 +272,25 @@ class _HomeScreenState extends State<HomeScreen> {
     return '未命名数据库';
   }
 
-  List<DatabaseView> _buildViews(Map<String, dynamic> database) {
-    final views = <DatabaseView>[
-      const DatabaseView(id: 'all', label: '全部', sorts: [
-        {'direction': 'descending', 'timestamp': 'last_edited_time'}
-      ]),
-      const DatabaseView(id: 'created', label: '最近创建', sorts: [
-        {'direction': 'descending', 'timestamp': 'created_time'}
-      ]),
-    ];
-
-    final properties = database['properties'];
-    if (properties is Map) {
-      String? titleProperty;
-      for (final entry in properties.entries) {
-        final property = entry.value;
-        if (property is Map && property['type'] == 'title') {
-          titleProperty = entry.key.toString();
-          break;
-        }
-      }
-
-      if (titleProperty != null) {
-        views.add(DatabaseView(id: 'title', label: '标题 A-Z', sorts: [
-          {'direction': 'ascending', 'property': titleProperty}
-        ]));
-      }
-
-      for (final type in const ['status', 'select', 'multi_select']) {
-        Map<dynamic, dynamic>? filterProperty;
-        String? propertyId;
-        List? options;
-
-        for (final entry in properties.entries) {
-          final property = entry.value;
-          if (property is! Map || property['type'] != type) continue;
-
-          final candidateOptions = property[type]?['options'];
-          if (candidateOptions is! List ||
-              candidateOptions.isEmpty ||
-              candidateOptions.length > 12) {
-            continue;
-          }
-
-          filterProperty = property;
-          propertyId = property['id']?.toString() ?? entry.key.toString();
-          options = candidateOptions;
-          break;
-        }
-
-        if (filterProperty == null || propertyId == null || options == null) {
-          continue;
-        }
-
-        for (final option in options) {
-          if (option is! Map) continue;
-          final name = option['name']?.toString();
-          if (name == null || name.isEmpty) continue;
-          views.add(DatabaseView(
-            id: 'filter:$propertyId:$name',
-            label: name,
-            filter: {
-              'property': propertyId,
-              type: type == 'multi_select'
-                  ? {'contains': name}
-                  : {'equals': name},
-            },
-            sorts: const [
-              {'direction': 'descending', 'timestamp': 'last_edited_time'}
-            ],
-          ));
-        }
-        break;
-      }
-    }
-
-    return views;
-  }
-
   Future<void> _selectSource(Map<String, dynamic> database) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('selected_database_id', database['id'].toString());
+    await prefs.setString(
+      'selected_data_source_id',
+      database['id'].toString(),
+    );
     if (!mounted) return;
     setState(() {
       _sourceId = database['id'].toString();
       _sourceTitle = _databaseTitle(database);
-      _views = _buildViews(database);
       _viewId = 'all';
     });
+    await _loadViews();
     await _loadRows();
   }
 
   Future<void> _selectRecent() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('selected_database_id', '__recent__');
+    await prefs.setString('selected_data_source_id', '__recent__');
     if (!mounted) return;
     setState(() {
       _sourceId = '__recent__';
