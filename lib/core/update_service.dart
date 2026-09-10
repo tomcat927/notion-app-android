@@ -8,6 +8,7 @@ import 'package:http/io_client.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_logger.dart';
 
@@ -35,6 +36,7 @@ class UpdateInfo {
 
 class UpdateService {
   static const String autoUpdatePreferenceKey = 'auto_check_update';
+  static const String directUpdatePreferenceKey = 'direct_update';
   static const String _owner = 'tomcat927';
   static const String _repository = 'notion-app-android';
   static const String _proxyPrefix = 'https://gh-proxy.com/';
@@ -46,8 +48,12 @@ class UpdateService {
     'com.notion.app/updater',
   );
 
-  /// gh-proxy 和 GitHub 更新源可直连，绕过系统代理减少一跳延迟。
-  static http.Client _directClient() {
+  /// 直连开启时绕过系统代理（gh-proxy 可国内直连），关闭则走系统代理。
+  static Future<http.Client> _updateClient() async {
+    final prefs = await SharedPreferences.getInstance();
+    final direct = prefs.getBool(directUpdatePreferenceKey) ?? true;
+    if (!direct) return http.Client();
+
     final httpClient = HttpClient();
     httpClient.findProxy = (uri) => 'DIRECT';
     return IOClient(httpClient);
@@ -68,7 +74,7 @@ class UpdateService {
 
   static Future<UpdateInfo?> _checkFromManifest() async {
     try {
-      final client = _directClient();
+      final client = await _updateClient();
       final response = await client
           .get(Uri.parse(_manifestUrl))
           .timeout(const Duration(seconds: 20));
@@ -106,7 +112,7 @@ class UpdateService {
   }
 
   static Future<UpdateInfo?> _checkFromGitHubApi() async {
-    final client = _directClient();
+    final client = await _updateClient();
     final response = await client
         .get(
           Uri.parse(_apiUrl),
@@ -202,7 +208,7 @@ class UpdateService {
     Object? lastError;
     for (final url in urls) {
       try {
-        final client = _directClient();
+        final client = await _updateClient();
         final request = http.Request('GET', Uri.parse(url));
         final response = await client
             .send(request)
@@ -245,7 +251,7 @@ class UpdateService {
   static Future<String?> _readChecksum(List<String> urls) async {
     for (final url in urls) {
       try {
-        final client = _directClient();
+        final client = await _updateClient();
         final response = await client
             .get(Uri.parse(url))
             .timeout(const Duration(seconds: 20));

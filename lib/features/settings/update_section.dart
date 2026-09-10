@@ -12,6 +12,7 @@ class UpdateSection extends StatefulWidget {
 
 class _UpdateSectionState extends State<UpdateSection> {
   bool _autoUpdate = true;
+  bool _directUpdate = true;
   bool _checking = false;
   UpdateInfo? _updateInfo;
   String? _message;
@@ -26,8 +27,13 @@ class _UpdateSectionState extends State<UpdateSection> {
     final prefs = await SharedPreferences.getInstance();
     final autoUpdate =
         prefs.getBool(UpdateService.autoUpdatePreferenceKey) ?? true;
+    final directUpdate =
+        prefs.getBool(UpdateService.directUpdatePreferenceKey) ?? true;
     if (!mounted) return;
-    setState(() => _autoUpdate = autoUpdate);
+    setState(() {
+      _autoUpdate = autoUpdate;
+      _directUpdate = directUpdate;
+    });
   }
 
   Future<void> _setAutoUpdate(bool value) async {
@@ -36,6 +42,16 @@ class _UpdateSectionState extends State<UpdateSection> {
     if (!mounted) return;
     setState(() {
       _autoUpdate = value;
+      _message = null;
+    });
+  }
+
+  Future<void> _setDirectUpdate(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(UpdateService.directUpdatePreferenceKey, value);
+    if (!mounted) return;
+    setState(() {
+      _directUpdate = value;
       _message = null;
     });
   }
@@ -127,6 +143,12 @@ class _UpdateSectionState extends State<UpdateSection> {
             title: const Text('自动检查更新'),
             value: _autoUpdate,
             onChanged: _setAutoUpdate,
+          ),
+          SwitchListTile(
+            title: const Text('更新直连'),
+            subtitle: const Text('开启后热更新绕过系统代理直接下载'),
+            value: _directUpdate,
+            onChanged: _setDirectUpdate,
           ),
           if (_updateInfo != null) ...[
             ListTile(
