@@ -39,6 +39,11 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const int _firstPageSize = 15;
+  static const int _loadMorePageSize = 30;
+  static const int _initialViewDetailCount = 8;
+  static const int _viewDetailBatchSize = 5;
+
   int _currentNavIndex = 0;
   bool _loading = true;
   bool _loadingMore = false;
@@ -50,6 +55,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _searchDebounce;
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
+  final ScrollController _scrollController = ScrollController();
+  int _loadGeneration = 0;
+  int _viewsGeneration = 0;
+  Future<void>? _databasesFuture;
 
   List<Map<String, dynamic>> _databases = [];
   Map<String, dynamic>? _selectedSource;
@@ -69,12 +78,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchDebounce?.cancel();
     _searchController.dispose();
     _searchFocus.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     unawaited(_initialize());
     unawaited(_autoCheckForUpdates());
   }
@@ -86,11 +97,11 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      await _loadDatabases();
+      await _restoreSelectedSource();
+      unawaited(_loadRows());
       if (_sourceId != '__recent__') {
-        await _loadViews();
+        unawaited(_loadViews());
       }
-      await _loadRows();
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -100,63 +111,201 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _loadDatabases() async {
+  Future<void> _restoreSelectedSource() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedId = prefs.getString('selected_data_source_id');
+
+    if (savedId == '__recent__') {
+      _applyRecentSource();
+      return;
+    }
+
+    if (savedId != null && savedId.isNotEmpty) {
+      try {
+        final response = await NotionClient.get('/data_sources/$savedId');
+        NotionClient.ensureSuccess(response, operation: '获取数据源');
+        final source = jsonDecode(response.body) as Map<String, dynamic>;
+        _applySource(source);
+        return;
+      } catch (error) {
+        await AppLogger.log('Home', '恢复已选数据源失败，回退搜索: $error');
+      }
+    }
+
+    final firstSource = await _findFirstSource();
+    if (firstSource == null) {
+      _applyRecentSource();
+      return;
+    }
+
+    _applySource(firstSource);
+    await prefs.setString('selected_data_source_id', _sourceId);
+  }
+
+  Future<Map<String, dynamic>?> _findFirstSource() async {
     final response = await NotionClient.post('/search', body: {
       'filter': {'property': 'object', 'value': 'data_source'},
       'sort': {'direction': 'descending', 'timestamp': 'last_edited_time'},
-      'page_size': 100,
+      'page_size': 1,
     });
     NotionClient.ensureSuccess(response, operation: '获取数据库');
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-    final prefs = await SharedPreferences.getInstance();
-    final savedId = prefs.getString('selected_data_source_id');
-    final savedExists = results.any((db) => db['id'] == savedId);
-    final selected = savedExists
-        ? results.firstWhere((db) => db['id'] == savedId)
-        : results.isNotEmpty
-            ? results.first
-            : null;
-    final sourceId = selected?['id']?.toString() ?? '__recent__';
+    return results.isEmpty ? null : results.first;
+  }
+
+  void _applySource(Map<String, dynamic> source) {
+    final sourceId = source['id']?.toString() ?? '';
+    if (sourceId.isEmpty || !mounted) return;
 
     setState(() {
-      _databases = results;
-      _selectedSource = selected;
+      _databases = [source];
+      _selectedSource = source;
       _sourceId = sourceId;
-      _sourceTitle = selected == null ? '最近页面' : _databaseTitle(selected);
+      _sourceTitle = _databaseTitle(source);
       _views = const <DatabaseView>[];
       _viewId = 'all';
     });
+  }
 
-    await prefs.setString('selected_data_source_id', _sourceId);
+  void _applyRecentSource() {
+    if (!mounted) return;
+
+    setState(() {
+      _databases = const <Map<String, dynamic>>[];
+      _selectedSource = null;
+      _sourceId = '__recent__';
+      _sourceTitle = '最近页面';
+      _views = const <DatabaseView>[];
+      _viewId = 'all';
+    });
+  }
+
+  Future<void> _ensureDatabasesLoaded() {
+    return _databasesFuture ??= _loadAllDatabases();
+  }
+
+  Future<void> _loadAllDatabases() async {
+    try {
+      final response = await NotionClient.post('/search', body: {
+        'filter': {'property': 'object', 'value': 'data_source'},
+        'sort': {'direction': 'descending', 'timestamp': 'last_edited_time'},
+        'page_size': 100,
+      });
+      NotionClient.ensureSuccess(response, operation: '获取数据库');
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      final merged = <String, Map<String, dynamic>>{};
+      for (final database in [..._databases, ...results]) {
+        final id = database['id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        merged[id] = database;
+      }
+
+      if (!mounted) return;
+      setState(() => _databases = merged.values.toList());
+    } catch (error) {
+      _databasesFuture = null;
+      await AppLogger.log('Home', '加载数据库列表失败: $error');
+      rethrow;
+    }
   }
 
   Future<void> _loadViews() async {
-    final encodedSourceId = Uri.encodeQueryComponent(_sourceId);
-    final response = await NotionClient.get(
-      '/views?data_source_id=$encodedSourceId&page_size=100',
-    );
-    NotionClient.ensureSuccess(response, operation: '获取视图');
+    final requestId = ++_viewsGeneration;
+    try {
+      final encodedSourceId = Uri.encodeQueryComponent(_sourceId);
+      final response = await NotionClient.get(
+        '/views?data_source_id=$encodedSourceId&page_size=100',
+      );
+      if (requestId != _viewsGeneration || !mounted) return;
+      NotionClient.ensureSuccess(response, operation: '获取视图');
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final references = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final references = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      if (references.isEmpty) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      final savedViewId = prefs.getString('selected_view_id:$_sourceId');
+      if (savedViewId != null) {
+        final savedIndex = references
+            .indexWhere((ref) => ref['id']?.toString() == savedViewId);
+        if (savedIndex > 0) {
+          final savedRef = references.removeAt(savedIndex);
+          references.insert(0, savedRef);
+        }
+      }
+
+      final initialCount = references.length < _initialViewDetailCount
+          ? references.length
+          : _initialViewDetailCount;
+      final initialViews = await _fetchViewDetails(
+        references.sublist(0, initialCount),
+        requestId: requestId,
+      );
+      if (requestId != _viewsGeneration || !mounted) return;
+      if (initialViews.isEmpty) return;
+
+      final selectedId = initialViews.any((view) => view.id == savedViewId)
+          ? savedViewId!
+          : initialViews.first.id;
+      setState(() {
+        _views = initialViews;
+        _viewId = selectedId;
+      });
+
+      if (references.length <= initialCount) return;
+      final remainingViews = await _fetchViewDetails(
+        references.sublist(initialCount),
+        requestId: requestId,
+      );
+      if (requestId != _viewsGeneration || !mounted) return;
+      if (remainingViews.isEmpty) return;
+      setState(() => _views = [..._views, ...remainingViews]);
+    } catch (error) {
+      if (requestId != _viewsGeneration || !mounted) return;
+      await AppLogger.log('Home', '加载视图失败: $error');
+    }
+  }
+
+  Future<List<DatabaseView>> _fetchViewDetails(
+    List<Map<String, dynamic>> references, {
+    required int requestId,
+  }) async {
     final views = <DatabaseView>[];
 
-    for (final reference in references) {
-      final viewId = reference['id']?.toString();
-      if (viewId == null || viewId.isEmpty) continue;
+    for (var start = 0; start < references.length; start += _viewDetailBatchSize) {
+      final rawEnd = start + _viewDetailBatchSize;
+      final end = rawEnd > references.length ? references.length : rawEnd;
+      final batch = references.sublist(start, end);
+      final batchViews = await Future.wait(
+        batch.map(_fetchViewDetail),
+      );
+      if (requestId != _viewsGeneration) return views;
+      views.addAll(batchViews.whereType<DatabaseView>());
+    }
 
+    return views;
+  }
+
+  Future<DatabaseView?> _fetchViewDetail(
+    Map<String, dynamic> reference,
+  ) async {
+    final viewId = reference['id']?.toString();
+    if (viewId == null || viewId.isEmpty) return null;
+
+    try {
       final detailResponse = await NotionClient.get('/views/$viewId');
       NotionClient.ensureSuccess(detailResponse, operation: '读取视图详情');
-      final detail =
-          jsonDecode(detailResponse.body) as Map<String, dynamic>;
+      final detail = jsonDecode(detailResponse.body) as Map<String, dynamic>;
       final name = detail['name']?.toString() ?? '';
       final type = detail['type']?.toString() ?? 'view';
       final filter = detail['filter'];
       final sorts = detail['sorts'];
 
-      views.add(DatabaseView(
+      return DatabaseView(
         id: viewId,
         label: name.isEmpty ? type : name,
         isNative: true,
@@ -164,27 +313,15 @@ class _HomeScreenState extends State<HomeScreen> {
         sorts: sorts is List
             ? List<Map<String, dynamic>>.from(sorts)
             : const [],
-      ));
+      );
+    } catch (error) {
+      await AppLogger.log('Home', '读取视图详情失败 $viewId: $error');
+      return null;
     }
-
-    if (!mounted) return;
-    final prefs = await SharedPreferences.getInstance();
-    final savedViewId = prefs.getString('selected_view_id:$_sourceId');
-    setState(() {
-      _views = views.isEmpty
-          ? const [
-              DatabaseView(id: 'all', label: '全部', sorts: [
-                {'direction': 'descending', 'timestamp': 'last_edited_time'}
-              ])
-            ]
-          : views;
-      _viewId = _views.any((view) => view.id == savedViewId)
-          ? savedViewId!
-          : _views.first.id;
-    });
   }
 
   Future<void> _loadRows() async {
+    final generation = ++_loadGeneration;
     setState(() {
       _loading = true;
       _error = null;
@@ -195,6 +332,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final data = await _loadRowsPage();
+      if (generation != _loadGeneration) return;
       final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
       if (!mounted) return;
       setState(() {
@@ -204,7 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (generation != _loadGeneration || !mounted) return;
       await AppLogger.log('Home', '加载记录失败: $error');
       setState(() {
         _loading = false;
@@ -215,12 +353,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadMoreRows() async {
     final cursor = _nextCursor;
-    if (_loadingMore || !_hasMore || cursor == null) return;
+    if (_loading ||
+        _loadingMore ||
+        !_hasMore ||
+        cursor == null ||
+        _pages.isEmpty) {
+      return;
+    }
+    final generation = _loadGeneration;
 
     setState(() => _loadingMore = true);
 
     try {
-      final data = await _loadRowsPage(cursor: cursor);
+      final data = await _loadRowsPage(
+        cursor: cursor,
+        pageSize: _loadMorePageSize,
+      );
+      if (generation != _loadGeneration || !mounted) return;
       final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
       if (!mounted) return;
       setState(() {
@@ -230,16 +379,28 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadingMore = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (generation != _loadGeneration || !mounted) return;
       await AppLogger.log('Home', '加载更多记录失败: $error');
       setState(() {
         _loadingMore = false;
-        _error = error.toString();
       });
     }
   }
 
-  Future<Map<String, dynamic>> _loadRowsPage({String? cursor}) async {
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    if (_loading || _loadingMore || !_hasMore) return;
+
+    final position = _scrollController.position;
+    if (position.maxScrollExtent - position.pixels < 240) {
+      unawaited(_loadMoreRows());
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadRowsPage({
+    String? cursor,
+    int pageSize = _firstPageSize,
+  }) async {
     final query = _searchQuery.trim();
     if (_sourceId == '__recent__' || (_searchActive && _searchScope == 'all')) {
       final response = await NotionClient.post('/search', body: {
@@ -249,14 +410,14 @@ class _HomeScreenState extends State<HomeScreen> {
           'direction': 'descending',
           'timestamp': 'last_edited_time',
         },
-        'page_size': 100,
+        'page_size': pageSize,
         if (cursor != null) 'start_cursor': cursor,
       });
       NotionClient.ensureSuccess(response, operation: '搜索页面');
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
 
-    return _queryDataSourceRows(cursor: cursor);
+    return _queryDataSourceRows(cursor: cursor, pageSize: pageSize);
   }
 
   String _sourceLabelForPage(Map<String, dynamic> page) {
@@ -313,7 +474,18 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _selectSearchScope(String scope) async {
     if (_searchScope == scope) return;
     setState(() => _searchScope = scope);
+    if (scope == 'all') {
+      unawaited(_preloadDatabases());
+    }
     await _loadRows();
+  }
+
+  Future<void> _preloadDatabases() async {
+    try {
+      await _ensureDatabasesLoaded();
+    } catch (_) {
+      // _loadAllDatabases 已记录日志，来源标签会回退为通用文案。
+    }
   }
 
   Map<String, dynamic>? _searchTitleFilter() {
@@ -330,7 +502,10 @@ class _HomeScreenState extends State<HomeScreen> {
     };
   }
 
-  Future<Map<String, dynamic>> _queryDataSourceRows({String? cursor}) async {
+  Future<Map<String, dynamic>> _queryDataSourceRows({
+    String? cursor,
+    int pageSize = _firstPageSize,
+  }) async {
     final filter = _searchTitleFilter();
     final sorts = [
       {'direction': 'descending', 'timestamp': 'last_edited_time'}
@@ -343,7 +518,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final response = await NotionClient.post(
         '/data_sources/$_sourceId/query',
         body: {
-          'page_size': 100,
+          'page_size': pageSize,
           if (cursor != null) 'start_cursor': cursor,
           if (useFilter && filter != null) 'filter': filter,
           if (useSorts && sorts.isNotEmpty) 'sorts': sorts,
@@ -399,12 +574,13 @@ class _HomeScreenState extends State<HomeScreen> {
       _sourceId = database['id'].toString();
       _selectedSource = database;
       _sourceTitle = _databaseTitle(database);
+      _views = const [];
       _viewId = 'all';
       _searchScope = 'current';
       _clearSearch(immediate: true);
     });
-    await _loadViews();
-    await _loadRows();
+    unawaited(_loadRows());
+    unawaited(_loadViews());
   }
 
   Future<void> _selectRecent() async {
@@ -419,7 +595,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _searchScope = 'all';
       _clearSearch(immediate: true);
     });
-    await _loadRows();
+    unawaited(_loadRows());
   }
 
   Future<void> _selectView(String id) async {
@@ -768,6 +944,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return RefreshIndicator(
       onRefresh: _loadRows,
       child: CustomScrollView(
+        controller: _scrollController,
         slivers: [
           if (_searchActive)
             SliverToBoxAdapter(child: _buildSearchScopeBar())
@@ -901,59 +1078,109 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showDatabasePicker() {
+    var databasesFuture = _ensureDatabasesLoaded();
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) {
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
-                child: Text('选择数据源'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.history),
-                title: const Text('最近页面'),
-                trailing: _sourceId == '__recent__'
-                    ? const Icon(Icons.check)
-                    : null,
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  unawaited(_selectRecent());
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return SafeArea(
+              child: FutureBuilder<void>(
+                future: databasesFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+
+                  if (snapshot.hasError) {
+                    return Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('数据库列表加载失败'),
+                          const SizedBox(height: 8),
+                          Text(
+                            '${snapshot.error}',
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed: () {
+                              setSheetState(() {
+                                databasesFuture = _ensureDatabasesLoaded();
+                              });
+                            },
+                            child: const Text('重试'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  return _buildDatabasePickerList(sheetContext);
                 },
               ),
-              ..._databases.map((database) {
-                final id = database['id']?.toString() ?? '';
-                return ListTile(
-                  leading: const Icon(Icons.dataset_outlined),
-                  title: Text(
-                    _databaseTitle(database),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    '最后编辑 ${_formatDateTime(database['last_edited_time']?.toString())}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: _sourceId == id ? const Icon(Icons.check) : null,
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    unawaited(_selectSource(database));
-                  },
-                );
-              }),
-              if (_databases.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('没有找到可用的数据库'),
-                ),
-            ],
-          ),
+            );
+          },
         );
       },
+    );
+  }
+
+  Widget _buildDatabasePickerList(BuildContext sheetContext) {
+    return ListView(
+      shrinkWrap: true,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Text('选择数据源'),
+        ),
+        ListTile(
+          leading: const Icon(Icons.history),
+          title: const Text('最近页面'),
+          trailing: _sourceId == '__recent__' ? const Icon(Icons.check) : null,
+          onTap: () {
+            Navigator.pop(sheetContext);
+            unawaited(_selectRecent());
+          },
+        ),
+        ..._databases.map((database) {
+          final id = database['id']?.toString() ?? '';
+          return ListTile(
+            leading: const Icon(Icons.dataset_outlined),
+            title: Text(
+              _databaseTitle(database),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text(
+              '最后编辑 ${_formatDateTime(database['last_edited_time']?.toString())}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: _sourceId == id ? const Icon(Icons.check) : null,
+            onTap: () {
+              Navigator.pop(sheetContext);
+              unawaited(_selectSource(database));
+            },
+          );
+        }),
+        if (_databases.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('没有找到可用的数据库'),
+          ),
+      ],
     );
   }
 
