@@ -788,19 +788,19 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             )
           else if (_pages.isEmpty)
-            const SliverFillRemaining(
+            SliverFillRemaining(
               hasScrollBody: false,
               child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
-                    SizedBox(height: 16),
+                    const Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
+                    const SizedBox(height: 16),
                     Text(
                       _searchQuery.isEmpty ? '这个视图里没有记录' : '没有匹配的页面',
                     ),
-                    SizedBox(height: 8),
-                    Text(
+                    const SizedBox(height: 8),
+                    const Text(
                       '请确认集成已关联到当前数据库',
                       style: TextStyle(color: Colors.grey, fontSize: 12),
                     ),
