@@ -100,15 +100,12 @@ class _HomeScreenState extends State<HomeScreen> {
             ? results.first
             : null;
     final sourceId = selected?['id']?.toString() ?? '__recent__';
-    final savedViewId = prefs.getString('selected_view_id:$sourceId');
-    final views =
-        selected == null ? <DatabaseView>[] : _buildViews(selected);
 
     setState(() {
       _databases = results;
       _sourceId = sourceId;
       _sourceTitle = selected == null ? '最近页面' : _databaseTitle(selected);
-      _views = views;
+      _views = const <DatabaseView>[];
       _viewId = 'all';
     });
 
@@ -150,6 +147,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (!mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    final savedViewId = prefs.getString('selected_view_id:$_sourceId');
     setState(() {
       _views = views.isEmpty
           ? const [
@@ -158,8 +157,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ])
             ]
           : views;
-      _viewId = _views.any((view) => view.id == _viewId)
-          ? _viewId
+      _viewId = _views.any((view) => view.id == savedViewId)
+          ? savedViewId!
           : _views.first.id;
     });
   }
