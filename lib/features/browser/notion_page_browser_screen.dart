@@ -26,7 +26,6 @@ class NotionPageBrowserScreen extends StatefulWidget {
 
 class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   late final WebViewController _controller;
-  late String _title;
   double _progress = 0;
   bool _hasError = false;
   String _errorDescription = '';
@@ -34,7 +33,6 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   @override
   void initState() {
     super.initState();
-    _title = widget.title;
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Theme.of(context).scaffoldBackgroundColor)
@@ -42,15 +40,6 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         NavigationDelegate(
           onProgress: (progress) {
             if (mounted) setState(() => _progress = progress.toDouble());
-          },
-          onTitleChanged: (title) {
-            final nextTitle = title.trim();
-            if (!mounted ||
-                nextTitle.isEmpty ||
-                nextTitle.toLowerCase() == 'notion') {
-              return;
-            }
-            setState(() => _title = nextTitle);
           },
           onNavigationRequest: _handleNavigation,
           onPageFinished: (_) {
@@ -62,7 +51,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
             }
           },
           onWebResourceError: (error) {
-            if (!error.isForMainFrame || !mounted) return;
+            if (error.isForMainFrame != true || !mounted) return;
             setState(() {
               _hasError = true;
               _errorDescription = error.description;
@@ -148,7 +137,11 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
             icon: const Icon(Icons.arrow_back),
             onPressed: _goBack,
           ),
-          title: Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
+          title: Text(
+            widget.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
           actions: [
             IconButton(
               icon: const Icon(Icons.refresh),

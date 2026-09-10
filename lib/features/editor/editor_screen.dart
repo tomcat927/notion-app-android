@@ -501,9 +501,9 @@ class _EditorScreenState extends State<EditorScreen> {
               ),
             ),
             if (block.hasFormatting && block.textChanged)
-              IconButton(
+              const IconButton(
                 onPressed: null,
-                icon: const Icon(Icons.format_clear, size: 19),
+                icon: Icon(Icons.format_clear, size: 19),
                 tooltip: '保存后此块的行内格式将转为纯文本',
               ),
             if (block.isNew)

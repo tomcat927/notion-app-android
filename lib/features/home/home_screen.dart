@@ -325,7 +325,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (_error != null) {
-      return Center(
+      return const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -342,15 +342,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (_pages.isEmpty) {
-      return Center(
+      return const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
-            const SizedBox(height: 16),
-            const Text('没有找到页面'),
-            const SizedBox(height: 8),
-            const Text('请确保集成已关联到你的 Notion 页面', style: TextStyle(color: Colors.grey, fontSize: 12)),
+            Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
+            SizedBox(height: 16),
+            Text('没有找到页面'),
+            SizedBox(height: 8),
+            Text('请确保集成已关联到你的 Notion 页面', style: TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
       );
