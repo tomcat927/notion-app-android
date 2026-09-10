@@ -271,11 +271,22 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     .notion-scroller.vertical,
     .notion-page-content {
       width: 100% !important;
-      max-width: 100vw !important;
-      margin-left: 0 !important;
-      margin-right: 0 !important;
+      max-width: calc(100vw - 32px) !important;
+      margin-left: auto !important;
+      margin-right: auto !important;
       padding-left: 16px !important;
       padding-right: 16px !important;
+    }
+    .notion-page-content > div,
+    .notion-page-content > .notion-list-view,
+    .notion-page-content > .notion-board-view,
+    .notion-page-content > .notion-table-view,
+    .notion-page-content > .notion-gallery-view,
+    .notion-page-content .notion-text-block,
+    .notion-page-content .notion-page-block {
+      max-width: 100% !important;
+      margin-left: 0 !important;
+      margin-right: 0 !important;
     }
   `;
 })();
