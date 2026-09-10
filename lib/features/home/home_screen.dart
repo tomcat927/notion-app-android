@@ -18,12 +18,14 @@ class DatabaseView {
   const DatabaseView({
     required this.id,
     required this.label,
+    this.isNative = false,
     this.filter,
     this.sorts = const [],
   });
 
   final String id;
   final String label;
+  final bool isNative;
   final Map<String, dynamic>? filter;
   final List<Map<String, dynamic>> sorts;
 }
@@ -50,6 +52,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _pages = [];
   String? _nextCursor;
   bool _hasMore = false;
+  String? _viewQueryId;
   Map<String, dynamic>? _selectedPage;
   List<dynamic>? _pageBlocks;
 
@@ -139,6 +142,7 @@ class _HomeScreenState extends State<HomeScreen> {
       views.add(DatabaseView(
         id: viewId,
         label: name.isEmpty ? type : name,
+        isNative: true,
         filter: filter is Map<String, dynamic> ? filter : null,
         sorts: sorts is List
             ? List<Map<String, dynamic>>.from(sorts)
@@ -174,32 +178,55 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final view = _activeView;
-      final response = _sourceId == '__recent__'
-          ? await NotionClient.post('/search', body: {
-              'filter': {'property': 'object', 'value': 'page'},
-              'sort': {
-                'direction': 'descending',
-                'timestamp': 'last_edited_time',
-              },
-              'page_size': 100,
-            })
-          : await NotionClient.post('/data_sources/$_sourceId/query', body: {
-              'page_size': 100,
-              if (view.filter != null) 'filter': view.filter,
-              if (view.sorts.isNotEmpty) 'sorts': view.sorts,
-            });
+      final Map<String, dynamic> data;
+      final List<Map<String, dynamic>> results;
 
-      NotionClient.ensureSuccess(response, operation: '加载记录');
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (_sourceId == '__recent__') {
+        final response = await NotionClient.post('/search', body: {
+          'filter': {'property': 'object', 'value': 'page'},
+          'sort': {
+            'direction': 'descending',
+            'timestamp': 'last_edited_time',
+          },
+          'page_size': 100,
+        });
+        NotionClient.ensureSuccess(response, operation: '加载记录');
+        data = jsonDecode(response.body) as Map<String, dynamic>;
+        results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+        _viewQueryId = null;
+      } else if (view.isNative) {
+        final response = await NotionClient.post(
+          '/views/${view.id}/queries',
+          body: {'page_size': 100},
+        );
+        NotionClient.ensureSuccess(response, operation: '加载视图记录');
+        data = jsonDecode(response.body) as Map<String, dynamic>;
+        _viewQueryId = data['id']?.toString();
+        results = await _hydrateViewResults(data['results']);
+      } else {
+        final response = await NotionClient.post(
+          '/data_sources/$_sourceId/query',
+          body: {
+            'page_size': 100,
+            if (view.filter != null) 'filter': view.filter,
+            if (view.sorts.isNotEmpty) 'sorts': view.sorts,
+          },
+        );
+        NotionClient.ensureSuccess(response, operation: '加载记录');
+        data = jsonDecode(response.body) as Map<String, dynamic>;
+        results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      }
+
       if (!mounted) return;
       setState(() {
-        _pages = List<Map<String, dynamic>>.from(data['results'] ?? []);
+        _pages = results;
         _nextCursor = data['next_cursor'] as String?;
         _hasMore = data['has_more'] == true;
         _loading = false;
       });
     } catch (error) {
       if (!mounted) return;
+      await AppLogger.log('Home', '加载记录失败: $error');
       setState(() {
         _loading = false;
         _error = error.toString();
@@ -215,26 +242,47 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final view = _activeView;
-      final response = _sourceId == '__recent__'
-          ? await NotionClient.post('/search', body: {
-              'filter': {'property': 'object', 'value': 'page'},
-              'sort': {
-                'direction': 'descending',
-                'timestamp': 'last_edited_time',
-              },
-              'page_size': 100,
-              'start_cursor': cursor,
-            })
-          : await NotionClient.post('/data_sources/$_sourceId/query', body: {
-              'page_size': 100,
-              'start_cursor': cursor,
-              if (view.filter != null) 'filter': view.filter,
-              if (view.sorts.isNotEmpty) 'sorts': view.sorts,
-            });
+      final Map<String, dynamic> data;
+      final List<Map<String, dynamic>> results;
 
-      NotionClient.ensureSuccess(response, operation: '加载更多记录');
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      if (_sourceId == '__recent__') {
+        final response = await NotionClient.post('/search', body: {
+          'filter': {'property': 'object', 'value': 'page'},
+          'sort': {
+            'direction': 'descending',
+            'timestamp': 'last_edited_time',
+          },
+          'page_size': 100,
+          'start_cursor': cursor,
+        });
+        NotionClient.ensureSuccess(response, operation: '加载更多记录');
+        data = jsonDecode(response.body) as Map<String, dynamic>;
+        results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      } else if (view.isNative && _viewQueryId != null) {
+        final encodedQueryId = Uri.encodeQueryComponent(_viewQueryId!);
+        final encodedCursor = Uri.encodeQueryComponent(cursor);
+        final response = await NotionClient.get(
+          '/views/${view.id}/queries/$encodedQueryId'
+          '?page_size=100&start_cursor=$encodedCursor',
+        );
+        NotionClient.ensureSuccess(response, operation: '加载更多视图记录');
+        data = jsonDecode(response.body) as Map<String, dynamic>;
+        results = await _hydrateViewResults(data['results']);
+      } else {
+        final response = await NotionClient.post(
+          '/data_sources/$_sourceId/query',
+          body: {
+            'page_size': 100,
+            'start_cursor': cursor,
+            if (view.filter != null) 'filter': view.filter,
+            if (view.sorts.isNotEmpty) 'sorts': view.sorts,
+          },
+        );
+        NotionClient.ensureSuccess(response, operation: '加载更多记录');
+        data = jsonDecode(response.body) as Map<String, dynamic>;
+        results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      }
+
       if (!mounted) return;
       setState(() {
         _pages = [..._pages, ...results];
@@ -244,6 +292,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } catch (error) {
       if (!mounted) return;
+      await AppLogger.log('Home', '加载更多记录失败: $error');
       setState(() {
         _loadingMore = false;
         _error = error.toString();
@@ -255,6 +304,71 @@ class _HomeScreenState extends State<HomeScreen> {
         (view) => view.id == _viewId,
         orElse: () => const DatabaseView(id: 'all', label: '全部'),
       );
+
+  Future<List<Map<String, dynamic>>> _hydrateViewResults(Object? results) async {
+    if (results is! List) return const [];
+
+    final orderedIds = results
+        .whereType<Map>()
+        .map((item) => item['id']?.toString())
+        .whereType<String>()
+        .toList();
+    final pages = List<Map<String, dynamic>>.filled(
+      orderedIds.length,
+      const {},
+      growable: false,
+    );
+    final missingIds = orderedIds.toSet();
+    final pagesById = <String, Map<String, dynamic>>{};
+
+    try {
+      String? cursor;
+      var requestCount = 0;
+      while (missingIds.isNotEmpty && requestCount < 50) {
+        final response = await NotionClient.post(
+          '/data_sources/$_sourceId/query',
+          body: {
+            'page_size': 100,
+            if (cursor != null) 'start_cursor': cursor,
+          },
+        );
+        NotionClient.ensureSuccess(response, operation: '读取页面详情');
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final sourcePages =
+            List<Map<String, dynamic>>.from(data['results'] ?? []);
+
+        for (final page in sourcePages) {
+          final pageId = page['id']?.toString();
+          if (pageId == null || !missingIds.contains(pageId)) continue;
+          pagesById[pageId] = page;
+          missingIds.remove(pageId);
+        }
+
+        cursor = data['next_cursor'] as String?;
+        requestCount++;
+        if (cursor == null) break;
+      }
+    } catch (_) {
+      // Fall through and fetch any still-missing rows individually.
+    }
+
+    for (var index = 0; index < orderedIds.length; index++) {
+      final pageId = orderedIds[index];
+      var page = pagesById[pageId];
+      if (page == null) {
+        try {
+          final response = await NotionClient.get('/pages/$pageId');
+          NotionClient.ensureSuccess(response, operation: '读取页面');
+          page = jsonDecode(response.body) as Map<String, dynamic>;
+        } catch (_) {
+          page = {'object': 'page', 'id': pageId};
+        }
+      }
+      pages[index] = page;
+    }
+
+    return pages;
+  }
 
   String _richText(List value) {
     return value
@@ -522,42 +636,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return _buildPageContent();
     }
 
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.red),
-            const SizedBox(height: 16),
-            Text('加载失败', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(_error!, style: const TextStyle(color: Colors.grey)),
-            const SizedBox(height: 16),
-            FilledButton(onPressed: _loadRows, child: const Text('重试')),
-          ],
-        ),
-      );
-    }
-
-    if (_pages.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
-            SizedBox(height: 16),
-            Text('没有找到页面'),
-            SizedBox(height: 8),
-            Text('请确保集成已关联到你的 Notion 页面', style: TextStyle(color: Colors.grey, fontSize: 12)),
-          ],
-        ),
-      );
-    }
-
     return RefreshIndicator(
       onRefresh: _loadRows,
       child: CustomScrollView(
@@ -565,7 +643,37 @@ class _HomeScreenState extends State<HomeScreen> {
           SliverToBoxAdapter(child: _buildDatabaseHeader()),
           if (_views.length > 1) SliverToBoxAdapter(child: _buildViewBar()),
           const SliverToBoxAdapter(child: SizedBox(height: 4)),
-          if (_pages.isEmpty)
+          if (_loading)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_error != null)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                    const SizedBox(height: 16),
+                    Text('加载失败', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(onPressed: _loadRows, child: const Text('重试')),
+                  ],
+                ),
+              ),
+            )
+          else if (_pages.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
               child: Center(
