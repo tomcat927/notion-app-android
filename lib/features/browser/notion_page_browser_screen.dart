@@ -102,6 +102,8 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
             final copied = await _copyToWebViewTemp(image.path);
             if (copied != null) paths.add(copied);
           }
+          await AppLogger.log('Browser', '即将返回给 WebView: $paths');
+          _scheduleFileInputDiagnostic();
           return paths;
         }
         final image = await picker.pickImage(source: ImageSource.gallery);
@@ -111,6 +113,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         }
         final copied = await _copyToWebViewTemp(image.path);
         if (copied == null) return const [];
+        await AppLogger.log('Browser', '即将返回给 WebView: [$copied]');
         _scheduleFileInputDiagnostic();
         return [copied];
       } catch (error) {
@@ -140,22 +143,33 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
 
   /// 延迟检查 file input 是否真的收到了文件，用于排查上传失败原因。
   void _scheduleFileInputDiagnostic() {
+    unawaited(AppLogger.log('Browser', '诊断已调度: 2 秒后检查 file input'));
     Future.delayed(const Duration(seconds: 2), () async {
+      await AppLogger.log('Browser', '诊断执行中: mounted=$mounted');
       if (!mounted) return;
       try {
-        final result = await _controller.runJavaScriptReturningResult('''
-JSON.stringify(
-  Array.from(document.querySelectorAll('input[type="file"]')).map(function(i) {
-    return {
-      files: i.files.length,
-      names: Array.from(i.files).map(function(f) { return f.name + ':' + f.size; })
-    };
-  })
-)
-''');
-        await AppLogger.log('Browser', 'file input 状态: $result');
+        final count = await _controller.runJavaScriptReturningResult(
+          'document.querySelectorAll("input[type=file]").length',
+        ).timeout(const Duration(seconds: 3));
+        await AppLogger.log('Browser', '诊断: file input 数量 = $count');
+
+        final detail = await _controller.runJavaScriptReturningResult('''
+(function() {
+  var inputs = document.querySelectorAll('input[type=file]');
+  var result = [];
+  for (var i = 0; i < inputs.length; i++) {
+    var names = [];
+    for (var j = 0; j < inputs[i].files.length; j++) {
+      names.push(inputs[i].files[j].name + ':' + inputs[i].files[j].size);
+    }
+    result.push({count: inputs[i].files.length, names: names});
+  }
+  return JSON.stringify(result);
+})()
+''').timeout(const Duration(seconds: 3));
+        await AppLogger.log('Browser', '诊断: file input 详情 = $detail');
       } catch (error) {
-        await AppLogger.log('Browser', 'file input 检查失败: $error');
+        await AppLogger.log('Browser', '诊断: JS 执行失败 $error');
       }
     });
   }
