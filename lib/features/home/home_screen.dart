@@ -325,7 +325,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (_error != null) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
