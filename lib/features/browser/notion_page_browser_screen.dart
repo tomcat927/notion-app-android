@@ -249,6 +249,10 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   Future<void> _applyAppShell() async {
     await _controller.runJavaScript('''
 (() => {
+  if (window.__notionWidthFix) return;
+  window.__notionWidthFix = true;
+
+  // CSS 基础层：隐藏侧边栏
   const styleId = 'notion-app-shell-style';
   let style = document.getElementById(styleId);
   if (!style) {
@@ -258,45 +262,87 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   }
 
   style.textContent = `
-    html, body {
-      width: 100% !important;
-      max-width: 100vw !important;
-      overflow-x: hidden !important;
-    }
     .notion-sidebar-container,
     .notion-sidebar {
       display: none !important;
     }
-    .notion-frame,
-    .notion-scroller.vertical,
-    .notion-page-content {
-      width: 100% !important;
-      max-width: 100vw !important;
-      margin-left: 0 !important;
-      margin-right: 0 !important;
-      padding-left: 0 !important;
-      padding-right: 0 !important;
-    }
-    .notion-page-content {
-      max-width: none !important;
-      padding-left: 12px !important;
-      padding-right: 12px !important;
-    }
-    .notion-page-content > div,
-    .notion-page-content > .notion-page-block,
-    .notion-page-content > .notion-page-block > div {
-      max-width: 100% !important;
-      margin-left: 0 !important;
-      margin-right: 0 !important;
-      padding-left: 0 !important;
-      padding-right: 0 !important;
-    }
-    .notion-page-content img {
-      max-width: 100% !important;
-      height: auto !important;
-      object-fit: contain !important;
-    }
   `;
+
+  // JS 层：直接修改内联样式，绕过 Notion 的 React 重渲染约束
+  function fixContentWidth() {
+    var content = document.querySelector('.notion-page-content');
+    if (!content) return;
+
+    // 从 content 向上遍历所有父容器，移除宽度约束
+    var el = content;
+    while (el && el !== document.body) {
+      if (el.style) {
+        if (el.style.maxWidth && el.style.maxWidth !== 'none' && el.style.maxWidth !== '100%') {
+          el.style.maxWidth = '100%';
+        }
+        if (parseFloat(el.style.paddingLeft || 0) > 24) el.style.paddingLeft = '0px';
+        if (parseFloat(el.style.paddingRight || 0) > 24) el.style.paddingRight = '0px';
+        if (el.style.marginLeft && el.style.marginLeft !== '0px' && el.style.marginLeft !== 'auto') {
+          el.style.marginLeft = '0px';
+        }
+        if (el.style.marginRight && el.style.marginRight !== '0px' && el.style.marginRight !== 'auto') {
+          el.style.marginRight = '0px';
+        }
+      }
+      el = el.parentElement;
+    }
+
+    // content 本身
+    content.style.maxWidth = '100%';
+    content.style.paddingLeft = '12px';
+    content.style.paddingRight = '12px';
+    content.style.marginLeft = '0px';
+    content.style.marginRight = '0px';
+
+    // content 的直接子元素：移除 Notion 设的内联 max-width/margin
+    var children = content.querySelectorAll(':scope > div, :scope > section');
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (child.style) {
+        if (child.style.maxWidth && child.style.maxWidth !== '100%') {
+          child.style.maxWidth = '100%';
+        }
+        if (child.style.marginLeft && child.style.marginLeft !== '0px' && child.style.marginLeft !== 'auto') {
+          child.style.marginLeft = '0px';
+        }
+        if (child.style.marginRight && child.style.marginRight !== '0px' && child.style.marginRight !== 'auto') {
+          child.style.marginRight = '0px';
+        }
+        if (parseFloat(child.style.paddingLeft || 0) > 24) child.style.paddingLeft = '0px';
+        if (parseFloat(child.style.paddingRight || 0) > 24) child.style.paddingRight = '0px';
+      }
+    }
+
+    // 遍历 content 内所有非媒体元素，移除小于 90vw 的 max-width
+    var walker = document.createTreeWalker(content, NodeFilter.SHOW_ELEMENT);
+    var node;
+    while (node = walker.nextNode()) {
+      if (node.tagName === 'IMG' || node.tagName === 'VIDEO' ||
+          node.tagName === 'IFRAME' || node.tagName === 'SVG' ||
+          node.tagName === 'CANVAS') continue;
+      if (node.closest('.notion-asset-wrapper')) continue;
+
+      var cs = window.getComputedStyle(node);
+      var mw = cs.maxWidth;
+      if (mw && mw !== 'none' && mw.endsWith('px')) {
+        var px = parseFloat(mw);
+        if (px > 0 && px < window.innerWidth * 0.9) {
+          node.style.maxWidth = '100%';
+        }
+      }
+    }
+  }
+
+  // 立即执行一次
+  fixContentWidth();
+
+  // 每 2 秒重新应用，应对 React 重渲染
+  setInterval(fixContentWidth, 2000);
 })();
 ''');
   }
