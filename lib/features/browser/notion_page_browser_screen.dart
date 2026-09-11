@@ -302,7 +302,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         ' w=' + pcs.width.substring(0, 12) +
         ' flex=' + pcs.flex.substring(0, 15) +
         ' fb=' + pcs.flexBasis.substring(0, 10) +
-        ' disp=' + pcs.display.substring(0, 8));
+        ' disp=' + pcs.display.substring(0, 8) + ' gtc=' + pcs.gridTemplateColumns.substring(0, 20));
       pEl = pEl.parentElement;
       pDepth++;
     }
@@ -321,6 +321,11 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       if (pelCs.left !== 'auto' && parseFloat(pelCs.left || 0) !== 0) el.style.setProperty('left', '0px', 'important');
       if (pelCs.transform !== 'none') el.style.setProperty('transform', 'none', 'important');
       if (pelCs.maxWidth !== 'none' && pelCs.maxWidth !== '100%') el.style.setProperty('max-width', '100%', 'important');
+      if (pelCs.display === 'grid') {
+        el.style.setProperty('grid-template-columns', '1fr', 'important');
+        el.style.setProperty('justify-items', 'stretch', 'important');
+        el.style.setProperty('justify-content', 'stretch', 'important');
+      }
       if (pelCs.width !== 'auto' && pelCs.width !== '100%' && !pelCs.width.endsWith('vw')) {
         el.style.setProperty('width', '100%', 'important');
       }
