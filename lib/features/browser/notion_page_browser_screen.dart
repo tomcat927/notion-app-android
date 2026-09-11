@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -47,6 +48,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   double _progress = 0;
   bool _hasError = false;
   String _errorDescription = '';
+  Completer<String>? _privateSearchCompleter;
 
   @override
   void initState() {
@@ -56,6 +58,15 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       ..setUserAgent(NotionPageBrowserScreen._mobileUserAgent)
       ..enableZoom(true)
       ..setBackgroundColor(Theme.of(context).scaffoldBackgroundColor)
+      ..addJavaScriptChannel(
+        'NotionPrivateSearchResult',
+        onMessageReceived: (message) {
+          final completer = _privateSearchCompleter;
+          if (completer != null && !completer.isCompleted) {
+            completer.complete(message.message);
+          }
+        },
+      )
       ..setOnConsoleMessage((message) {
         if (message.message.contains('[NOTION-LAYOUT]')) {
           unawaited(AppLogger.logLayout(message.message));
@@ -452,6 +463,179 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     Navigator.of(context).pop();
   }
 
+  Future<void> _verifyPrivateSearch() async {
+    final keywordController = TextEditingController();
+    final spaceIdController = TextEditingController();
+    try {
+      final input = await showDialog<Map<String, String>>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('验证网页全文搜索'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: keywordController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: '搜索关键词',
+                      hintText: '例如：哈哈',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: spaceIdController,
+                    decoration: const InputDecoration(
+                      labelText: '工作区 ID（spaceId）',
+                      hintText: '例如：8b0312a6-2d13-4463-9bbf-800dd3cd01e2',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '请求会在 WebView 登录会话内执行，不会把 Cookie 传给 Flutter。',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop({
+                    'query': keywordController.text.trim(),
+                    'spaceId': spaceIdController.text.trim(),
+                  });
+                },
+                child: const Text('开始验证'),
+              ),
+            ],
+          );
+        },
+      );
+      if (!mounted || input == null) return;
+
+      final query = input['query'] ?? '';
+      final spaceId = input['spaceId'] ?? '';
+      if (query.isEmpty) {
+        _showPrivateSearchMessage('请输入搜索关键词');
+        return;
+      }
+
+      final result = await _requestPrivateSearch(query, spaceId);
+      if (mounted) _showPrivateSearchMessage(result);
+    } finally {
+      keywordController.dispose();
+      spaceIdController.dispose();
+    }
+  }
+
+  Future<String> _requestPrivateSearch(String query, String spaceId) async {
+    final completer = Completer<String>();
+    _privateSearchCompleter = completer;
+    final payload = {
+      'type': 'BlocksInSpace',
+      'query': query,
+      'limit': 20,
+      'source': 'quick_find',
+      'filters': {
+        'isDeletedOnly': false,
+        'excludeTemplates': false,
+        'navigableBlockContentOnly': false,
+        'requireEditPermissions': false,
+        'includePublicPagesWithoutExplicitAccess': false,
+        'ancestors': [],
+        'createdBy': [],
+        'editedBy': [],
+        'lastEditedTime': {},
+        'createdTime': {},
+        'inTeams': [],
+        'excludeSurrogateCollections': false,
+        'excludedParentCollectionIds': [],
+      },
+      'sort': {'field': 'relevance'},
+      'peopleBlocksToInclude': 'all',
+      if (spaceId.isNotEmpty) 'spaceId': spaceId,
+      'excludedBlockIds': [],
+      'searchSessionFlowNumber': 1,
+      'searchSessionId': 'flutter-${DateTime.now().microsecondsSinceEpoch}',
+    };
+    final script = '''
+(() => {
+  const payload = ${jsonEncode(payload)};
+  fetch('https://app.notion.com/api/v3/search', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).then(async response => {
+    const body = await response.text();
+    window.NotionPrivateSearchResult.postMessage(JSON.stringify({
+      'status': response.status,
+      'body': body.substring(0, 20000)
+    }));
+  }).catch(error => {
+    window.NotionPrivateSearchResult.postMessage(JSON.stringify({
+      'error': String(error)
+    }));
+  });
+})();
+''';
+
+    try {
+      await _controller.runJavaScript(script);
+      return await completer.future.timeout(const Duration(seconds: 25));
+    } catch (error) {
+      return jsonEncode({'error': error.toString()});
+    } finally {
+      if (identical(_privateSearchCompleter, completer)) {
+        _privateSearchCompleter = null;
+      }
+    }
+  }
+
+  void _showPrivateSearchMessage(String raw) {
+    var display = raw;
+    try {
+      final data = jsonDecode(raw);
+      if (data is Map) {
+        final status = data['status'];
+        final error = data['error'];
+        final body = data['body'];
+        display = [
+          if (status != null) 'HTTP 状态：$status',
+          if (error != null) '错误：$error',
+          if (body != null) body,
+        ].join('\n\n');
+      }
+    } catch (_) {
+      // Keep the raw channel result for diagnostics.
+    }
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('网页全文搜索验证结果'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(display),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope<Object?>(
@@ -472,6 +656,11 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
+            IconButton(
+              icon: const Icon(Icons.manage_search),
+              tooltip: '验证网页全文搜索',
+              onPressed: _verifyPrivateSearch,
+            ),
             IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: _controller.reload,
