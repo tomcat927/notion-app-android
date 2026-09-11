@@ -278,46 +278,36 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     var content = document.querySelector('.notion-page-content');
     if (!content) return;
 
-    // 诊断日志：记录 content 及其子元素的布局信息
+    var vmeta = document.querySelector('meta[name="viewport"]');
+    if (vmeta) { vmeta.setAttribute('content', 'width=device-width, initial-scale=1.0'); }
+    document.documentElement.style.setProperty('margin', '0', 'important');
+    document.documentElement.style.setProperty('padding', '0', 'important');
+    document.body.style.setProperty('margin', '0', 'important');
+    document.body.style.setProperty('padding', '0', 'important');
+
     var vw = window.innerWidth;
+    var dRect = document.documentElement.getBoundingClientRect();
     var cs = window.getComputedStyle(content);
     var rect = content.getBoundingClientRect();
-    var log = 'vw=' + vw + ' content: rect.left=' + Math.round(rect.left) +
-      ' width=' + Math.round(rect.width) +
-      ' maxW=' + cs.maxWidth +
-      ' padL=' + cs.paddingLeft +
-      ' padR=' + cs.paddingRight +
-      ' marL=' + cs.marginLeft +
-      ' marR=' + cs.marginRight;
+    var log = 'vw=' + vw + ' docEl.L=' + Math.round(dRect.left) + ' docEl.W=' + Math.round(dRect.width) + ' vp=' + (vmeta ? vmeta.getAttribute('content').substring(0, 25) : 'none') + ' | content: L=' + Math.round(rect.left) + ' W=' + Math.round(rect.width) + ' padL=' + cs.paddingLeft + ' padR=' + cs.paddingRight + ' marL=' + cs.marginLeft + ' marR=' + cs.marginRight;
     var kids = content.querySelectorAll(':scope > div, :scope > section');
     for (var k = 0; k < kids.length && k < 3; k++) {
       var kcs = window.getComputedStyle(kids[k]);
       var krect = kids[k].getBoundingClientRect();
-      log += ' | child' + k + ': rect.left=' + Math.round(krect.left) +
-        ' width=' + Math.round(krect.width) +
-        ' maxW=' + kcs.maxWidth +
-        ' padL=' + kcs.paddingLeft +
-        ' padR=' + kcs.paddingRight +
-        ' marL=' + kcs.marginLeft +
-        ' marR=' + kcs.marginRight;
+      log += ' | child' + k + ': L=' + Math.round(krect.left) + ' W=' + Math.round(krect.width) + ' padL=' + kcs.paddingLeft;
     }
-    console.log('[NOTION-LAYOUT] ' + log);
-
-    // 诊断：记录父容器链（最多 5 层）
     var pEl = content;
     var pLog = [];
     var pDepth = 0;
     while (pEl && pDepth < 5) {
       var pcs = window.getComputedStyle(pEl);
-      pLog.push(pEl.tagName + '.' + (pEl.className || '').toString().split(' ')[0].substring(0, 20) +
-        ' L=' + Math.round(pEl.getBoundingClientRect().left) +
-        ' pad=' + pcs.paddingLeft + '/' + pcs.paddingRight +
-        ' mar=' + pcs.marginLeft + '/' + pcs.marginRight);
+      pLog.push(pEl.tagName + '.' + (pEl.className || '').toString().split(' ')[0].substring(0, 20) + ' L=' + Math.round(pEl.getBoundingClientRect().left) + ' pad=' + pcs.paddingLeft + '/' + pcs.paddingRight + ' mar=' + pcs.marginLeft + '/' + pcs.marginRight);
       pEl = pEl.parentElement;
       pDepth++;
     }
     log += ' | parents: ' + pLog.join(' ; ');
-    // 从 content 向上遍历所有父容器（含 body），用 !important 强制移除宽度约束
+    console.log('[NOTION-LAYOUT] ' + log);
+
     var el = content;
     while (el) {
       var pelCs = window.getComputedStyle(el);
@@ -325,55 +315,35 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       if (parseFloat(pelCs.paddingRight || 0) > 0) el.style.setProperty('padding-right', '0px', 'important');
       if (parseFloat(pelCs.marginLeft || 0) > 0) el.style.setProperty('margin-left', '0px', 'important');
       if (parseFloat(pelCs.marginRight || 0) > 0) el.style.setProperty('margin-right', '0px', 'important');
-      if (pelCs.maxWidth !== 'none' && pelCs.maxWidth !== '100%') {
-        el.style.setProperty('max-width', '100%', 'important');
-      }
+      if (pelCs.maxWidth !== 'none' && pelCs.maxWidth !== '100%') el.style.setProperty('max-width', '100%', 'important');
       if (el === document.body) break;
       el = el.parentElement;
     }
-
-    // content 本身
     content.style.setProperty('max-width', '100%', 'important');
     content.style.setProperty('padding-left', '12px', 'important');
     content.style.setProperty('padding-right', '12px', 'important');
     content.style.setProperty('margin-left', '0px', 'important');
     content.style.setProperty('margin-right', '0px', 'important');
 
-    // content 的直接子元素：移除 Notion 设的内联 max-width/margin
     var children = content.querySelectorAll(':scope > div, :scope > section');
     for (var i = 0; i < children.length; i++) {
       var child = children[i];
       if (child.style) {
-        if (child.style.maxWidth && child.style.maxWidth !== '100%') {
-          child.style.maxWidth = '100%';
-        }
-        if (child.style.marginLeft && child.style.marginLeft !== '0px' && child.style.marginLeft !== 'auto') {
-          child.style.marginLeft = '0px';
-        }
-        if (child.style.marginRight && child.style.marginRight !== '0px' && child.style.marginRight !== 'auto') {
-          child.style.marginRight = '0px';
-        }
-        if (parseFloat(child.style.paddingLeft || 0) > 24) child.style.paddingLeft = '0px';
-        if (parseFloat(child.style.paddingRight || 0) > 24) child.style.paddingRight = '0px';
+        if (child.style.maxWidth && child.style.maxWidth !== '100%') child.style.maxWidth = '100%';
+        if (child.style.marginLeft && child.style.marginLeft !== '0px' && child.style.marginLeft !== 'auto') child.style.marginLeft = '0px';
+        if (child.style.marginRight && child.style.marginRight !== '0px' && child.style.marginRight !== 'auto') child.style.marginRight = '0px';
       }
     }
-
-    // 遍历 content 内所有非媒体元素，移除小于 90vw 的 max-width
     var walker = document.createTreeWalker(content, NodeFilter.SHOW_ELEMENT);
     var node;
     while (node = walker.nextNode()) {
-      if (node.tagName === 'IMG' || node.tagName === 'VIDEO' ||
-          node.tagName === 'IFRAME' || node.tagName === 'SVG' ||
-          node.tagName === 'CANVAS') continue;
+      if (node.tagName === 'IMG' || node.tagName === 'VIDEO' || node.tagName === 'IFRAME' || node.tagName === 'SVG' || node.tagName === 'CANVAS') continue;
       if (node.closest('.notion-asset-wrapper')) continue;
-
-      var cs = window.getComputedStyle(node);
-      var mw = cs.maxWidth;
+      var wcs = window.getComputedStyle(node);
+      var mw = wcs.maxWidth;
       if (mw && mw !== 'none' && mw.endsWith('px')) {
         var px = parseFloat(mw);
-        if (px > 0 && px < window.innerWidth * 0.9) {
-          node.style.maxWidth = '100%';
-        }
+        if (px > 0 && px < window.innerWidth * 0.9) node.style.maxWidth = '100%';
       }
     }
   }
