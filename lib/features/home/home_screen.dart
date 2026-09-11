@@ -1065,7 +1065,11 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
       body: Stack(
         children: [
-          _privateSearchBridge.buildHiddenWebView(),
+          Positioned(
+            left: 0,
+            top: 0,
+            child: _privateSearchBridge.buildHiddenWebView(),
+          ),
           Positioned.fill(child: _buildContent()),
         ],
       ),
