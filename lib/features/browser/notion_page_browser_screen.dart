@@ -58,7 +58,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       ..setBackgroundColor(Theme.of(context).scaffoldBackgroundColor)
       ..setOnConsoleMessage((message) {
         if (message.message.contains('[NOTION-LAYOUT]')) {
-          unawaited(AppLogger.log('Browser', message.message));
+          unawaited(AppLogger.logLayout(message.message));
         }
       })
       ..setNavigationDelegate(

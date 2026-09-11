@@ -1600,6 +1600,19 @@ class _HomeScreenState extends State<HomeScreen> {
             onTap: _showDebugLogs,
           ),
         ),
+        Card(
+          child: SwitchListTile(
+            title: const Text('页面布局宽度调试日志'),
+            subtitle: const Text('开启后记录 Notion 页面宽度修复过程，需先开启调试日志'),
+            value: AppLogger.isLayoutDebugEnabled,
+            onChanged: AppLogger.isEnabled
+                ? (value) async {
+                    await AppLogger.setLayoutDebugEnabled(value);
+                    setState(() {});
+                  }
+                : null,
+          ),
+        ),
         const SizedBox(height: 8),
         Card(
           child: ListTile(
