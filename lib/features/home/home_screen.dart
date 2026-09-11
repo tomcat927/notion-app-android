@@ -16,6 +16,7 @@ import '../editor/editor_screen.dart';
 import '../settings/update_section.dart';
 import '../settings/update_dialog.dart';
 import '../settings/about_section.dart';
+import '../search/private_search_screen.dart';
 
 class DatabaseView {
   const DatabaseView({
@@ -1030,6 +1031,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ]
                   : [
+                      IconButton(
+                        icon: const Icon(Icons.travel_explore),
+                        tooltip: '全文搜索',
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const PrivateSearchScreen(),
+                            ),
+                          );
+                        },
+                      ),
                       IconButton(
                         icon: const Icon(Icons.search),
                         tooltip: '搜索',
