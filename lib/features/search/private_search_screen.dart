@@ -139,7 +139,9 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       final result = await _controller.runJavaScriptReturningResult('''
 (() => {
   const boot = window.__notion_boot_data || {};
-  return boot.spaceId ? 'ready' : 'pending';
+  const html = document.documentElement?.outerHTML || '';
+  if (boot.spaceId) return 'ready';
+  return /"spaceId":"[0-9a-f-]{36}"/i.test(html) ? 'html' : 'pending';
 })()
 ''');
       final value = result.toString().replaceAll('"', '').trim();
@@ -147,7 +149,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
         'PrivateSearch',
         'bridge probe: url=$_bridgeUrl result=$value retry=$_probeRetryCount',
       );
-      if (value == 'ready') {
+      if (value == 'ready' || value == 'html') {
         if (!mounted) return;
         setState(() => _bridgeReady = true);
         return;
@@ -276,7 +278,11 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     window.NotionPrivateSearchBridge.postMessage(JSON.stringify(value));
   }
   const boot = window.__notion_boot_data || {};
-  const spaceId = boot.spaceId;
+  const html = document.documentElement?.outerHTML || '';
+  const spaceMatch = html.match(/"spaceId":"([0-9a-f-]{36})"/i);
+  const userMatch = html.match(/"userId":"([0-9a-f-]{36})"/i);
+  const spaceId = boot.spaceId || spaceMatch?.[1] || '';
+  const userId = boot.userId || userMatch?.[1] || '';
   if (!spaceId) {
     post({requestId, error: '未读取到当前工作区 ID'});
     return;
@@ -287,7 +293,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     credentials: 'include',
     headers: {
       'content-type': 'application/json',
-      'x-notion-active-user-header': boot.userId || '',
+      'x-notion-active-user-header': userId,
       'x-notion-space-id': spaceId,
       'x-notion-client-version': '23.13.20260910.2358',
       'user-agent': '$searchUserAgent'

@@ -1038,11 +1038,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           Navigator.of(context).push(
                             MaterialPageRoute(
                               builder: (_) => PrivateSearchScreen(
-                                bridgePageId: _sourceId == '__recent__'
-                                    ? (_pages.isEmpty
-                                        ? null
-                                        : _pages.first['id']?.toString())
-                                    : _sourceId,
+                                bridgePageId: _pages.isEmpty
+                                    ? null
+                                    : _pages.first['id']?.toString(),
                               ),
                             ),
                           );
