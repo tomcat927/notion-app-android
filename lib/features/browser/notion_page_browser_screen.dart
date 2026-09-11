@@ -275,6 +275,20 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
 
   // JS 层：直接修改内联样式，绕过 Notion 的 React 重渲染约束
   function fixContentWidth() {
+    // 隐藏 Notion AI 浮动按钮
+    var aiBtn = document.querySelector('.notion-ai-button');
+    if (aiBtn) {
+      var p = aiBtn;
+      while (p && p !== document.body) {
+        var ps = window.getComputedStyle(p);
+        if (ps.position === 'absolute' || ps.position === 'fixed') {
+          p.style.setProperty('display', 'none', 'important');
+          break;
+        }
+        p = p.parentElement;
+      }
+    }
+
     var content = document.querySelector('.notion-page-content');
     if (!content) return;
 
