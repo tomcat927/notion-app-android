@@ -327,7 +327,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     for (var li = 0; li < layoutEls.length; li++) {
       var ltCs = window.getComputedStyle(layoutEls[li]);
       var gtc = ltCs.gridTemplateColumns;
-      var tracks = gtc ? gtc.trim().split(/\s+/) : [];
+      var tracks = gtc ? gtc.trim().split(/\\s+/) : [];
       if (tracks.length > 1) {
         layoutEls[li].style.setProperty('grid-template-columns', '100%', 'important');
       }
