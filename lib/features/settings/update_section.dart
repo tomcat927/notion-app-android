@@ -3,6 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/update_service.dart';
 
+import 'update_dialog.dart';
+
 class UpdateSection extends StatefulWidget {
   const UpdateSection({super.key});
 
@@ -76,6 +78,8 @@ class _UpdateSectionState extends State<UpdateSection> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('当前已是最新版本')),
         );
+      } else {
+        await showUpdatePrompt(context, updateInfo);
       }
     } catch (_) {
       if (!mounted) return;
