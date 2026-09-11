@@ -29,7 +29,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   void initState() {
     super.initState();
     _bridge.addListener(_onBridgeChanged);
-    unawaited(_bridge.start(seedPageId: widget.bridgePageId));
+    _bridge.start(seedPageId: widget.bridgePageId);
   }
 
   @override

@@ -495,10 +495,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
       });
       if (results.isNotEmpty) {
-        unawaited(
-          _privateSearchBridge.start(
-            seedPageId: results.first['id']?.toString(),
-          ),
+        _privateSearchBridge.start(
+          seedPageId: results.first['id']?.toString(),
         );
       }
     } catch (error) {
