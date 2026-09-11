@@ -289,19 +289,18 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     var dRect = document.documentElement.getBoundingClientRect();
     var cs = window.getComputedStyle(content);
     var rect = content.getBoundingClientRect();
-    var log = 'vw=' + vw + ' docEl.L=' + Math.round(dRect.left) + ' docEl.W=' + Math.round(dRect.width) + ' vp=' + (vmeta ? vmeta.getAttribute('content').substring(0, 25) : 'none') + ' | content: L=' + Math.round(rect.left) + ' W=' + Math.round(rect.width) + ' padL=' + cs.paddingLeft + ' padR=' + cs.paddingRight + ' marL=' + cs.marginLeft + ' marR=' + cs.marginRight;
-    var kids = content.querySelectorAll(':scope > div, :scope > section');
-    for (var k = 0; k < kids.length && k < 3; k++) {
-      var kcs = window.getComputedStyle(kids[k]);
-      var krect = kids[k].getBoundingClientRect();
-      log += ' | child' + k + ': L=' + Math.round(krect.left) + ' W=' + Math.round(krect.width) + ' padL=' + kcs.paddingLeft;
-    }
+    var log = 'vw=' + vw + ' docEl.L=' + Math.round(dRect.left) + ' | content: L=' + Math.round(rect.left) + ' W=' + Math.round(rect.width) + ' padL=' + cs.paddingLeft;
+
     var pEl = content;
     var pLog = [];
     var pDepth = 0;
-    while (pEl && pDepth < 5) {
+    while (pEl && pDepth < 6) {
       var pcs = window.getComputedStyle(pEl);
-      pLog.push(pEl.tagName + '.' + (pEl.className || '').toString().split(' ')[0].substring(0, 20) + ' L=' + Math.round(pEl.getBoundingClientRect().left) + ' pad=' + pcs.paddingLeft + '/' + pcs.paddingRight + ' mar=' + pcs.marginLeft + '/' + pcs.marginRight);
+      var pr = pEl.getBoundingClientRect();
+      pLog.push(pEl.tagName + '.' + (pEl.className || '').toString().split(' ')[0].substring(0, 18) +
+        ' L=' + Math.round(pr.left) + ' W=' + Math.round(pr.width) +
+        ' w=' + pcs.width + ' blw=' + pcs.borderLeftWidth +
+        ' left=' + pcs.left + ' tf=' + pcs.transform.substring(0, 15));
       pEl = pEl.parentElement;
       pDepth++;
     }
@@ -315,11 +314,26 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       if (parseFloat(pelCs.paddingRight || 0) > 0) el.style.setProperty('padding-right', '0px', 'important');
       if (parseFloat(pelCs.marginLeft || 0) > 0) el.style.setProperty('margin-left', '0px', 'important');
       if (parseFloat(pelCs.marginRight || 0) > 0) el.style.setProperty('margin-right', '0px', 'important');
+      if (parseFloat(pelCs.borderLeftWidth || 0) > 0) el.style.setProperty('border-left-width', '0px', 'important');
+      if (parseFloat(pelCs.borderRightWidth || 0) > 0) el.style.setProperty('border-right-width', '0px', 'important');
+      if (pelCs.left !== 'auto' && parseFloat(pelCs.left || 0) !== 0) el.style.setProperty('left', '0px', 'important');
+      if (pelCs.transform !== 'none') el.style.setProperty('transform', 'none', 'important');
       if (pelCs.maxWidth !== 'none' && pelCs.maxWidth !== '100%') el.style.setProperty('max-width', '100%', 'important');
+      if (pelCs.width !== 'auto' && pelCs.width !== '100%' && !pelCs.width.endsWith('vw')) {
+        el.style.setProperty('width', '100%', 'important');
+      }
+      if (el.parentElement) {
+        var parentCs = window.getComputedStyle(el.parentElement);
+        if (parentCs.display === 'flex' || parentCs.display === 'grid') {
+          el.parentElement.style.setProperty('justify-content', 'flex-start', 'important');
+          el.parentElement.style.setProperty('align-items', 'stretch', 'important');
+        }
+      }
       if (el === document.body) break;
       el = el.parentElement;
     }
     content.style.setProperty('max-width', '100%', 'important');
+    content.style.setProperty('width', '100%', 'important');
     content.style.setProperty('padding-left', '12px', 'important');
     content.style.setProperty('padding-right', '12px', 'important');
     content.style.setProperty('margin-left', '0px', 'important');
@@ -332,18 +346,6 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         if (child.style.maxWidth && child.style.maxWidth !== '100%') child.style.maxWidth = '100%';
         if (child.style.marginLeft && child.style.marginLeft !== '0px' && child.style.marginLeft !== 'auto') child.style.marginLeft = '0px';
         if (child.style.marginRight && child.style.marginRight !== '0px' && child.style.marginRight !== 'auto') child.style.marginRight = '0px';
-      }
-    }
-    var walker = document.createTreeWalker(content, NodeFilter.SHOW_ELEMENT);
-    var node;
-    while (node = walker.nextNode()) {
-      if (node.tagName === 'IMG' || node.tagName === 'VIDEO' || node.tagName === 'IFRAME' || node.tagName === 'SVG' || node.tagName === 'CANVAS') continue;
-      if (node.closest('.notion-asset-wrapper')) continue;
-      var wcs = window.getComputedStyle(node);
-      var mw = wcs.maxWidth;
-      if (mw && mw !== 'none' && mw.endsWith('px')) {
-        var px = parseFloat(mw);
-        if (px > 0 && px < window.innerWidth * 0.9) node.style.maxWidth = '100%';
       }
     }
   }
