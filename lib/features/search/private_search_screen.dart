@@ -6,6 +6,7 @@ import '../../core/app_logger.dart';
 import '../browser/notion_page_browser_screen.dart';
 import 'private_search_bridge.dart';
 import 'private_search_models.dart';
+import 'recent_pages_service.dart';
 
 class PrivateSearchScreen extends StatefulWidget {
   const PrivateSearchScreen({super.key, this.bridgePageId});
@@ -24,12 +25,14 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   bool _searching = false;
   String? _error;
   List<PrivateSearchHit> _hits = [];
+  List<RecentPage> _recentPages = [];
 
   @override
   void initState() {
     super.initState();
     _bridge.addListener(_onBridgeChanged);
     _bridge.start(seedPageId: widget.bridgePageId);
+    unawaited(_loadRecentPages());
   }
 
   @override
@@ -44,6 +47,11 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _loadRecentPages() async {
+    final pages = await RecentPagesService.getRecentPages();
+    if (mounted) setState(() => _recentPages = pages);
+  }
+
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     if (value.trim().isEmpty) {
@@ -51,6 +59,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
         _hits = [];
         _error = null;
       });
+      unawaited(_loadRecentPages());
       return;
     }
     _debounce = Timer(
@@ -109,6 +118,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   }
 
   void _openHit(PrivateSearchHit hit) {
+    unawaited(RecentPagesService.addRecentPage(hit.pageId, hit.title));
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => NotionPageBrowserScreen(
@@ -219,10 +229,14 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     if (_searching && _hits.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
+    final queryIsEmpty = _searchController.text.trim().isEmpty;
     if (_hits.isEmpty) {
+      if (queryIsEmpty && _recentPages.isNotEmpty) {
+        return _buildRecentPages();
+      }
       return Center(
         child: Text(
-          _searchController.text.trim().isEmpty ? '' : '没有找到相关内容',
+          queryIsEmpty ? '输入关键词搜索全部笔记内容' : '没有找到相关内容',
           style: Theme.of(context).textTheme.bodyMedium,
         ),
       );
@@ -273,6 +287,51 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildRecentPages() {
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      itemCount: _recentPages.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final page = _recentPages[index];
+        return Card(
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () {
+              unawaited(RecentPagesService.addRecentPage(page.pageId, page.title));
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => NotionPageBrowserScreen(
+                    pageId: page.pageId,
+                    title: page.title,
+                  ),
+                ),
+              );
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  const Icon(Icons.history, size: 20, color: Colors.grey),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      page.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right, color: Colors.grey),
                 ],
               ),
             ),

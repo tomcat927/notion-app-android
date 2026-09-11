@@ -18,6 +18,7 @@ import '../settings/update_dialog.dart';
 import '../settings/about_section.dart';
 import '../search/private_search_screen.dart';
 import '../search/private_search_bridge.dart';
+import '../search/recent_pages_service.dart';
 
 class DatabaseView {
   const DatabaseView({
@@ -1437,6 +1438,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final pageId = page['id']?.toString();
     if (pageId == null || pageId.isEmpty) return;
 
+    final title = _pageTitle(page);
+    unawaited(RecentPagesService.addRecentPage(pageId, title));
     await AppLogger.log('Home', '使用内嵌浏览器打开: $pageId');
 
     if (!mounted) return;
