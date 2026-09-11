@@ -279,8 +279,22 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     }
     .notion-page-content {
       max-width: none !important;
-      padding-left: 16px !important;
-      padding-right: 16px !important;
+      padding-left: 12px !important;
+      padding-right: 12px !important;
+    }
+    .notion-page-content > div,
+    .notion-page-content > .notion-page-block,
+    .notion-page-content > .notion-page-block > div {
+      max-width: 100% !important;
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
+    .notion-page-content img {
+      max-width: 100% !important;
+      height: auto !important;
+      object-fit: contain !important;
     }
   `;
 })();
