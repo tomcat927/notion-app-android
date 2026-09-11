@@ -387,9 +387,19 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Padding(
+          Offstage(
+            offstage: true,
+            child: SizedBox(
+              width: 1,
+              height: 1,
+              child: WebViewWidget(controller: _controller),
+            ),
+          ),
+          Column(
+            children: [
+              Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: TextField(
               controller: _searchController,
@@ -468,10 +478,8 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ),
-          Expanded(child: _buildResults()),
-          SizedBox(
-            height: _bridgeReady ? 1 : 240,
-            child: WebViewWidget(controller: _controller),
+            Expanded(child: _buildResults()),
+            ],
           ),
         ],
       ),
