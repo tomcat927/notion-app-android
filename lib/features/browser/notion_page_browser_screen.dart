@@ -289,7 +289,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     var dRect = document.documentElement.getBoundingClientRect();
     var cs = window.getComputedStyle(content);
     var rect = content.getBoundingClientRect();
-    var log = 'vw=' + vw + ' docEl.L=' + Math.round(dRect.left) + ' | content: L=' + Math.round(rect.left) + ' W=' + Math.round(rect.width) + ' padL=' + cs.paddingLeft;
+    var log = 'vw=' + vw + ' | content: L=' + Math.round(rect.left) + ' W=' + Math.round(rect.width) + ' padL=' + cs.paddingLeft;
 
     var pEl = content;
     var pLog = [];
@@ -297,10 +297,12 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     while (pEl && pDepth < 6) {
       var pcs = window.getComputedStyle(pEl);
       var pr = pEl.getBoundingClientRect();
-      pLog.push(pEl.tagName + '.' + (pEl.className || '').toString().split(' ')[0].substring(0, 18) +
+      pLog.push(pEl.tagName + '.' + (pEl.className || '').toString().split(' ')[0].substring(0, 15) +
         ' L=' + Math.round(pr.left) + ' W=' + Math.round(pr.width) +
-        ' w=' + pcs.width + ' blw=' + pcs.borderLeftWidth +
-        ' left=' + pcs.left + ' tf=' + pcs.transform.substring(0, 15));
+        ' w=' + pcs.width.substring(0, 12) +
+        ' flex=' + pcs.flex.substring(0, 15) +
+        ' fb=' + pcs.flexBasis.substring(0, 10) +
+        ' disp=' + pcs.display.substring(0, 8));
       pEl = pEl.parentElement;
       pDepth++;
     }
@@ -322,9 +324,11 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       if (pelCs.width !== 'auto' && pelCs.width !== '100%' && !pelCs.width.endsWith('vw')) {
         el.style.setProperty('width', '100%', 'important');
       }
+      el.style.setProperty('flex', '1 1 100%', 'important');
+      el.style.setProperty('flex-basis', '100%', 'important');
       if (el.parentElement) {
         var parentCs = window.getComputedStyle(el.parentElement);
-        if (parentCs.display === 'flex' || parentCs.display === 'grid') {
+        if (parentCs.display === 'flex' || parentCs.display === 'grid' || parentCs.display.startsWith('inline')) {
           el.parentElement.style.setProperty('justify-content', 'flex-start', 'important');
           el.parentElement.style.setProperty('align-items', 'stretch', 'important');
         }
@@ -334,6 +338,8 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     }
     content.style.setProperty('max-width', '100%', 'important');
     content.style.setProperty('width', '100%', 'important');
+    content.style.setProperty('flex', '1 1 100%', 'important');
+    content.style.setProperty('flex-basis', '100%', 'important');
     content.style.setProperty('padding-left', '12px', 'important');
     content.style.setProperty('padding-right', '12px', 'important');
     content.style.setProperty('margin-left', '0px', 'important');
