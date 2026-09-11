@@ -303,21 +303,33 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     }
     console.log('[NOTION-LAYOUT] ' + log);
 
+    // 诊断：记录父容器链的布局信息
+    var pEl = content;
+    var pLog = [];
+    while (pEl && pEl !== document.body) {
+      var pcs = window.getComputedStyle(pEl);
+      pLog.push({
+        tag: pEl.tagName,
+        cls: (pEl.className || '').toString().split(' ')[0].substring(0, 25),
+        rectL: Math.round(pEl.getBoundingClientRect().left),
+        padL: pcs.paddingLeft,
+        padR: pcs.paddingRight,
+        marL: pcs.marginLeft,
+        marR: pcs.marginRight
+      });
+      pEl = pEl.parentElement;
+    }
+    log += ' | parents: ' + JSON.stringify(pLog);
     // 从 content 向上遍历所有父容器，移除宽度约束
     var el = content;
     while (el && el !== document.body) {
-      if (el.style) {
-        if (el.style.maxWidth && el.style.maxWidth !== 'none' && el.style.maxWidth !== '100%') {
-          el.style.maxWidth = '100%';
-        }
-        if (parseFloat(el.style.paddingLeft || 0) > 24) el.style.paddingLeft = '0px';
-        if (parseFloat(el.style.paddingRight || 0) > 24) el.style.paddingRight = '0px';
-        if (el.style.marginLeft && el.style.marginLeft !== '0px' && el.style.marginLeft !== 'auto') {
-          el.style.marginLeft = '0px';
-        }
-        if (el.style.marginRight && el.style.marginRight !== '0px' && el.style.marginRight !== 'auto') {
-          el.style.marginRight = '0px';
-        }
+      var pelCs = window.getComputedStyle(el);
+      if (parseFloat(pelCs.paddingLeft || 0) > 0) el.style.paddingLeft = '0px';
+      if (parseFloat(pelCs.paddingRight || 0) > 0) el.style.paddingRight = '0px';
+      if (parseFloat(pelCs.marginLeft || 0) > 0) el.style.marginLeft = '0px';
+      if (parseFloat(pelCs.marginRight || 0) > 0) el.style.marginRight = '0px';
+      if (pelCs.maxWidth !== 'none' && pelCs.maxWidth !== '100%') {
+        el.style.maxWidth = '100%';
       }
       el = el.parentElement;
     }
