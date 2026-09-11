@@ -525,7 +525,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   Future<String> _requestPrivateSearch(String query) async {
     final completer = Completer<String>();
     _privateSearchCompleter = completer;
-    final searchUserAgent = NotionPageBrowserScreen._searchUserAgent;
+    const searchUserAgent = NotionPageBrowserScreen._searchUserAgent;
     final payload = {
       'type': 'BlocksInSpace',
       'query': query,
