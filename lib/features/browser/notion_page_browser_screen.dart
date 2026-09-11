@@ -525,6 +525,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   Future<String> _requestPrivateSearch(String query) async {
     final completer = Completer<String>();
     _privateSearchCompleter = completer;
+    final searchUserAgent = NotionPageBrowserScreen._searchUserAgent;
     final payload = {
       'type': 'BlocksInSpace',
       'query': query,
@@ -571,7 +572,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       'x-notion-active-user-header': boot.userId || '',
       'x-notion-space-id': spaceId,
       'x-notion-client-version': '23.13.20260910.2358',
-      'user-agent': '${_searchUserAgent}'
+      'user-agent': '$searchUserAgent'
     },
     body: JSON.stringify(payload)
   }).then(async response => {
