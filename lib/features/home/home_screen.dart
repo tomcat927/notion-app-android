@@ -17,6 +17,7 @@ import '../settings/update_section.dart';
 import '../settings/update_dialog.dart';
 import '../settings/about_section.dart';
 import '../search/private_search_screen.dart';
+import '../search/private_search_bridge.dart';
 
 class DatabaseView {
   const DatabaseView({
@@ -97,6 +98,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _hasMore = false;
   Map<String, dynamic>? _selectedPage;
   List<dynamic>? _pageBlocks;
+  final NotionPrivateSearchBridge _privateSearchBridge =
+      NotionPrivateSearchBridge.instance;
 
   @override
   void dispose() {
@@ -104,6 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchController.dispose();
     _searchFocus.dispose();
     _scrollController.dispose();
+    _privateSearchBridge.reset();
     super.dispose();
   }
 
@@ -490,6 +494,13 @@ class _HomeScreenState extends State<HomeScreen> {
         _hasMore = data['has_more'] == true;
         _loading = false;
       });
+      if (results.isNotEmpty) {
+        unawaited(
+          _privateSearchBridge.start(
+            seedPageId: results.first['id']?.toString(),
+          ),
+        );
+      }
     } catch (error) {
       if (generation != _loadGeneration || !mounted) return;
       await AppLogger.log('Home', '加载记录失败: $error');
@@ -1037,11 +1048,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         onPressed: () {
                           Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => PrivateSearchScreen(
-                                bridgePageId: _pages.isEmpty
-                                    ? null
-                                    : _pages.first['id']?.toString(),
-                              ),
+                              builder: (_) => const PrivateSearchScreen(),
                             ),
                           );
                         },
@@ -1058,7 +1065,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ],
             ),
-      body: _buildContent(),
+      body: Stack(
+        children: [
+          _privateSearchBridge.buildHiddenWebView(),
+          Positioned.fill(child: _buildContent()),
+        ],
+      ),
       floatingActionButton: _currentNavIndex == 0 &&
               _selectedPage == null &&
               _sourceId != '__recent__' &&
