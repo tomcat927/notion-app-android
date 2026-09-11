@@ -286,6 +286,21 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     .notion-sidebar {
       display: none !important;
     }
+    .layout {
+      grid-template-columns: 100% !important;
+    }
+    .layout-content,
+    .layout-content > * {
+      width: 100% !important;
+      max-width: 100% !important;
+    }
+    .notion-frame,
+    .notion-page {
+      width: 100% !important;
+      max-width: 100% !important;
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+    }
   `;
 
   // JS 层：直接修改内联样式，绕过 Notion 的 React 重渲染约束
@@ -306,6 +321,17 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
 
     var content = document.querySelector('.notion-page-content');
     if (!content) return;
+
+    // Force-fix desktop multi-column grid on .layout (React may restore 3-col)
+    var layoutEls = document.querySelectorAll('.layout');
+    for (var li = 0; li < layoutEls.length; li++) {
+      var ltCs = window.getComputedStyle(layoutEls[li]);
+      var gtc = ltCs.gridTemplateColumns;
+      var tracks = gtc ? gtc.trim().split(/\s+/) : [];
+      if (tracks.length > 1) {
+        layoutEls[li].style.setProperty('grid-template-columns', '100%', 'important');
+      }
+    }
 
     var vmeta = document.querySelector('meta[name="viewport"]');
     if (vmeta) { vmeta.setAttribute('content', 'width=device-width, initial-scale=1.0'); }
@@ -390,15 +416,15 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     }
   }
 
-  // 前 4 秒每 200ms 执行一次（捕获 React 渲染时机），之后降频
+  // 前 4.5 秒每 150ms 执行一次（捕获 React 渲染时机），之后降频到 500ms
   var fixCount = 0;
   function fixLoop() {
     fixContentWidth();
     fixCount++;
-    if (fixCount < 20) {
-      setTimeout(fixLoop, 200);
+    if (fixCount < 30) {
+      setTimeout(fixLoop, 150);
     } else {
-      setInterval(fixContentWidth, 2000);
+      setInterval(fixContentWidth, 500);
     }
   }
   fixLoop();
