@@ -303,43 +303,41 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     }
     console.log('[NOTION-LAYOUT] ' + log);
 
-    // 诊断：记录父容器链的布局信息
+    // 诊断：记录父容器链（最多 5 层）
     var pEl = content;
     var pLog = [];
-    while (pEl && pEl !== document.body) {
+    var pDepth = 0;
+    while (pEl && pDepth < 5) {
       var pcs = window.getComputedStyle(pEl);
-      pLog.push({
-        tag: pEl.tagName,
-        cls: (pEl.className || '').toString().split(' ')[0].substring(0, 25),
-        rectL: Math.round(pEl.getBoundingClientRect().left),
-        padL: pcs.paddingLeft,
-        padR: pcs.paddingRight,
-        marL: pcs.marginLeft,
-        marR: pcs.marginRight
-      });
+      pLog.push(pEl.tagName + '.' + (pEl.className || '').toString().split(' ')[0].substring(0, 20) +
+        ' L=' + Math.round(pEl.getBoundingClientRect().left) +
+        ' pad=' + pcs.paddingLeft + '/' + pcs.paddingRight +
+        ' mar=' + pcs.marginLeft + '/' + pcs.marginRight);
       pEl = pEl.parentElement;
+      pDepth++;
     }
-    log += ' | parents: ' + JSON.stringify(pLog);
-    // 从 content 向上遍历所有父容器，移除宽度约束
+    log += ' | parents: ' + pLog.join(' ; ');
+    // 从 content 向上遍历所有父容器（含 body），用 !important 强制移除宽度约束
     var el = content;
-    while (el && el !== document.body) {
+    while (el) {
       var pelCs = window.getComputedStyle(el);
-      if (parseFloat(pelCs.paddingLeft || 0) > 0) el.style.paddingLeft = '0px';
-      if (parseFloat(pelCs.paddingRight || 0) > 0) el.style.paddingRight = '0px';
-      if (parseFloat(pelCs.marginLeft || 0) > 0) el.style.marginLeft = '0px';
-      if (parseFloat(pelCs.marginRight || 0) > 0) el.style.marginRight = '0px';
+      if (parseFloat(pelCs.paddingLeft || 0) > 0) el.style.setProperty('padding-left', '0px', 'important');
+      if (parseFloat(pelCs.paddingRight || 0) > 0) el.style.setProperty('padding-right', '0px', 'important');
+      if (parseFloat(pelCs.marginLeft || 0) > 0) el.style.setProperty('margin-left', '0px', 'important');
+      if (parseFloat(pelCs.marginRight || 0) > 0) el.style.setProperty('margin-right', '0px', 'important');
       if (pelCs.maxWidth !== 'none' && pelCs.maxWidth !== '100%') {
-        el.style.maxWidth = '100%';
+        el.style.setProperty('max-width', '100%', 'important');
       }
+      if (el === document.body) break;
       el = el.parentElement;
     }
 
     // content 本身
-    content.style.maxWidth = '100%';
-    content.style.paddingLeft = '12px';
-    content.style.paddingRight = '12px';
-    content.style.marginLeft = '0px';
-    content.style.marginRight = '0px';
+    content.style.setProperty('max-width', '100%', 'important');
+    content.style.setProperty('padding-left', '12px', 'important');
+    content.style.setProperty('padding-right', '12px', 'important');
+    content.style.setProperty('margin-left', '0px', 'important');
+    content.style.setProperty('margin-right', '0px', 'important');
 
     // content 的直接子元素：移除 Notion 设的内联 max-width/margin
     var children = content.querySelectorAll(':scope > div, :scope > section');
