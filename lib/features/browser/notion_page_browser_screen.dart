@@ -361,11 +361,18 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     }
   }
 
-  // 立即执行一次
-  fixContentWidth();
-
-  // 每 2 秒重新应用，应对 React 重渲染
-  setInterval(fixContentWidth, 2000);
+  // 前 4 秒每 200ms 执行一次（捕获 React 渲染时机），之后降频
+  var fixCount = 0;
+  function fixLoop() {
+    fixContentWidth();
+    fixCount++;
+    if (fixCount < 20) {
+      setTimeout(fixLoop, 200);
+    } else {
+      setInterval(fixContentWidth, 2000);
+    }
+  }
+  fixLoop();
 })();
 ''');
   }
