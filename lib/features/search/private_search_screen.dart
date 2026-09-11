@@ -80,13 +80,13 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
           },
           onHttpError: (error) {
             final statusCode = error.response?.statusCode;
-            if (!mounted || statusCode == null) return;
-            setState(() {
-              _bridgeReady = false;
-              _bridgeStatus = 'Notion 页面返回 HTTP $statusCode';
-            });
+            final requestUrl = error.request?.uri.toString() ?? '未知请求';
+            if (statusCode == null) return;
             unawaited(
-              AppLogger.log('PrivateSearch', 'http error: $statusCode'),
+              AppLogger.log(
+                'PrivateSearch',
+                'http error: $statusCode url=$requestUrl',
+              ),
             );
           },
           onWebResourceError: (error) {
@@ -126,6 +126,15 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     }
 
     final requestId = data['requestId']?.toString() ?? '';
+    final status = data['status'];
+    final results = data['results'];
+    unawaited(
+      AppLogger.log(
+        'PrivateSearch',
+        'search response: id=$requestId status=$status '
+        'count=${results is List ? results.length : 0}',
+      ),
+    );
     final completer = _searchCompleters.remove(requestId);
     if (completer != null && !completer.isCompleted) {
       completer.complete(message.message);
@@ -336,6 +345,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
 ''';
 
     try {
+      unawaited(AppLogger.log('PrivateSearch', 'search request: $requestId'));
       await _controller.runJavaScript(script);
       return await completer.future.timeout(const Duration(seconds: 25));
     } catch (_) {
