@@ -215,6 +215,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       const hits = (parsed.results || []).map(item => {
         const highlight = item.highlight || {};
         const highlights = item.highlights || {};
+        const rankingSignals = item.rankingSignals || {};
         const snippets = (highlights.textHighlights || []).slice(0, 4).map(
           entry => ({
             text: entry.highlightedText || '',
@@ -223,8 +224,8 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         );
         return {
           pageId: item.id || '',
-          title: highlight.title || highlights.titleHighlight || '',
-          pathText: highlight.pathText || highlights.pathTextHighlight || '',
+          title: highlight.title || highlights.titleHighlight || rankingSignals.TITLE || '',
+          pathText: highlight.pathText || highlights.pathTextHighlight || rankingSignals.PATH_TEXT || '',
           snippet: highlight.text || snippets[0]?.text || '',
           highlightBlockId:
             item.highlightBlockId || snippets[0]?.blockId || '',
