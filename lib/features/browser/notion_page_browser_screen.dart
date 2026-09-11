@@ -33,6 +33,10 @@ class NotionPageBrowserScreen extends StatefulWidget {
       'Mozilla/5.0 (Linux; Android 10; K) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
       'Chrome/141.0.0.0 Mobile Safari/537.36';
+  static const String _searchUserAgent =
+      'Mozilla/5.0 (Linux; Android 10; K) '
+      'AppleWebKit/537.36 (KHTML, like Gecko) '
+      'Chrome/152.0.0.0 Mobile Safari/537.36';
 
   @override
   State<NotionPageBrowserScreen> createState() =>
@@ -465,9 +469,8 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
 
   Future<void> _verifyPrivateSearch() async {
     final keywordController = TextEditingController();
-    final spaceIdController = TextEditingController();
     try {
-      final input = await showDialog<Map<String, String>>(
+      final query = await showDialog<String>(
         context: context,
         builder: (dialogContext) {
           return AlertDialog(
@@ -484,17 +487,9 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
                       hintText: '例如：哈哈',
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: spaceIdController,
-                    decoration: const InputDecoration(
-                      labelText: '工作区 ID（spaceId）',
-                      hintText: '例如：8b0312a6-2d13-4463-9bbf-800dd3cd01e2',
-                    ),
-                  ),
                   const SizedBox(height: 8),
                   const Text(
-                    '请求会在 WebView 登录会话内执行，不会把 Cookie 传给 Flutter。',
+                    '请求会在 WebView 登录会话内执行，工作区 ID 自动读取。',
                     style: TextStyle(fontSize: 12),
                   ),
                 ],
@@ -506,36 +501,28 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
                 child: const Text('取消'),
               ),
               FilledButton(
-                onPressed: () {
-                  Navigator.of(dialogContext).pop({
-                    'query': keywordController.text.trim(),
-                    'spaceId': spaceIdController.text.trim(),
-                  });
-                },
+                onPressed: () =>
+                    Navigator.of(dialogContext).pop(keywordController.text.trim()),
                 child: const Text('开始验证'),
               ),
             ],
           );
         },
       );
-      if (!mounted || input == null) return;
-
-      final query = input['query'] ?? '';
-      final spaceId = input['spaceId'] ?? '';
+      if (!mounted || query == null) return;
       if (query.isEmpty) {
         _showPrivateSearchMessage('请输入搜索关键词');
         return;
       }
 
-      final result = await _requestPrivateSearch(query, spaceId);
+      final result = await _requestPrivateSearch(query);
       if (mounted) _showPrivateSearchMessage(result);
     } finally {
       keywordController.dispose();
-      spaceIdController.dispose();
     }
   }
 
-  Future<String> _requestPrivateSearch(String query, String spaceId) async {
+  Future<String> _requestPrivateSearch(String query) async {
     final completer = Completer<String>();
     _privateSearchCompleter = completer;
     final payload = {
@@ -560,7 +547,6 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       },
       'sort': {'field': 'relevance'},
       'peopleBlocksToInclude': 'all',
-      if (spaceId.isNotEmpty) 'spaceId': spaceId,
       'excludedBlockIds': [],
       'searchSessionFlowNumber': 1,
       'searchSessionId': 'flutter-${DateTime.now().microsecondsSinceEpoch}',
@@ -568,10 +554,25 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     final script = '''
 (() => {
   const payload = ${jsonEncode(payload)};
+  const boot = window.__notion_boot_data || {};
+  const spaceId = boot.spaceId;
+  if (!spaceId) {
+    window.NotionPrivateSearchResult.postMessage(JSON.stringify({
+      'error': '未读取到当前工作区 ID，请等待页面加载完成'
+    }));
+    return;
+  }
+  payload.spaceId = spaceId;
   fetch('https://app.notion.com/api/v3/search', {
     method: 'POST',
     credentials: 'include',
-    headers: {'content-type': 'application/json'},
+    headers: {
+      'content-type': 'application/json',
+      'x-notion-active-user-header': boot.userId || '',
+      'x-notion-space-id': spaceId,
+      'x-notion-client-version': '23.13.20260910.2358',
+      'user-agent': '${_searchUserAgent}'
+    },
     body: JSON.stringify(payload)
   }).then(async response => {
     const body = await response.text();
