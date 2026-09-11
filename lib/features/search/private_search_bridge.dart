@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/app_logger.dart';
+import 'recent_pages_service.dart';
 
 class NotionPrivateSearchBridge extends ChangeNotifier {
   NotionPrivateSearchBridge._();
@@ -145,6 +146,14 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       throw StateError('Notion 会话未就绪');
     }
 
+    final recentPages = await RecentPagesService.getRecentPages();
+    final boosting = recentPages
+        .map((p) => {
+              'visitedAt': p.visitedAt.millisecondsSinceEpoch,
+              'pageId': p.pageId,
+            })
+        .toList();
+
     _searchToken++;
     final requestId =
         'search-${DateTime.now().microsecondsSinceEpoch}-$_searchToken';
@@ -176,6 +185,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       'excludedBlockIds': [],
       'searchSessionFlowNumber': 1,
       'searchSessionId': 'flutter-${DateTime.now().microsecondsSinceEpoch}',
+      'recentPagesForBoosting': boosting,
     };
 
     final script = '''
