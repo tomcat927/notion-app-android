@@ -44,7 +44,11 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   }
 
   void _onBridgeChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    if (_bridge.isReady && _searchController.text.trim().isEmpty && _hits.isEmpty && !_searching) {
+      unawaited(_search(''));
+    }
   }
 
   Future<void> _loadRecentPages() async {
@@ -55,11 +59,10 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     if (value.trim().isEmpty) {
-      setState(() {
-        _hits = [];
-        _error = null;
-      });
-      unawaited(_loadRecentPages());
+      _debounce = Timer(
+        const Duration(milliseconds: 300),
+        () => unawaited(_search('')),
+      );
       return;
     }
     _debounce = Timer(
@@ -70,7 +73,6 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
 
   Future<void> _search(String rawQuery) async {
     final query = rawQuery.trim();
-    if (query.isEmpty) return;
     if (!_bridge.isReady) {
       setState(() => _error = 'Notion 会话未就绪');
       return;
@@ -236,7 +238,9 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       }
       return Center(
         child: Text(
-          queryIsEmpty ? '输入关键词搜索全部笔记内容' : '没有找到相关内容',
+          queryIsEmpty
+              ? (_bridge.isReady ? '没有最近访问记录' : 'Notion 会话未就绪')
+              : '没有找到相关内容',
           style: Theme.of(context).textTheme.bodyMedium,
         ),
       );
@@ -244,10 +248,21 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
 
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-      itemCount: _hits.length,
+      itemCount: _hits.length + (queryIsEmpty ? 1 : 0),
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
-        final hit = _hits[index];
+        if (queryIsEmpty && index == 0) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 4),
+            child: Text(
+              '最近访问',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: Colors.grey,
+                  ),
+            ),
+          );
+        }
+        final hit = _hits[queryIsEmpty ? index - 1 : index];
         return Card(
           child: InkWell(
             borderRadius: BorderRadius.circular(8),
