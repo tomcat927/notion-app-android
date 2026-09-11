@@ -4,11 +4,14 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/app_logger.dart';
 import '../browser/notion_page_browser_screen.dart';
 import 'private_search_models.dart';
 
 class PrivateSearchScreen extends StatefulWidget {
-  const PrivateSearchScreen({super.key});
+  const PrivateSearchScreen({super.key, this.bridgePageId});
+
+  final String? bridgePageId;
 
   @override
   State<PrivateSearchScreen> createState() => _PrivateSearchScreenState();
@@ -29,12 +32,20 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   bool _bridgeReady = false;
   bool _searching = false;
   String _bridgeStatus = '正在连接 Notion';
+  String? _bridgeUrl;
   String? _error;
   List<PrivateSearchHit> _hits = [];
 
   @override
   void initState() {
     super.initState();
+    final seedPageId = widget.bridgePageId?.trim().replaceAll('-', '') ?? '';
+    final initialUrl = seedPageId.isEmpty
+        ? 'https://www.notion.so/'
+        : 'https://www.notion.so/$seedPageId';
+    unawaited(
+      AppLogger.log('PrivateSearch', 'bridge start: $initialUrl'),
+    );
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(_searchUserAgent)
@@ -44,17 +55,53 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       )
       ..setNavigationDelegate(
         NavigationDelegate(
+          onPageStarted: (url) {
+            if (!mounted) return;
+            setState(() {
+              _bridgeReady = false;
+              _bridgeStatus = '正在加载 Notion 页面';
+              _bridgeUrl = url;
+            });
+            unawaited(AppLogger.log('PrivateSearch', 'page started: $url'));
+          },
           onPageFinished: (_) => unawaited(_probeBridge()),
+          onUrlChange: (change) {
+            final url = change.url ?? '';
+            if (!mounted || url.isEmpty) return;
+            final uri = Uri.tryParse(url);
+            final isLogin = uri != null &&
+                (uri.pathSegments.contains('login') ||
+                    uri.path.contains('/login'));
+            setState(() {
+              _bridgeUrl = url;
+              _bridgeStatus = isLogin ? '需要登录 Notion' : '正在连接 Notion';
+            });
+            unawaited(AppLogger.log('PrivateSearch', 'url changed: $url'));
+          },
+          onHttpError: (error) {
+            final statusCode = error.response?.statusCode;
+            if (!mounted || statusCode == null) return;
+            setState(() {
+              _bridgeReady = false;
+              _bridgeStatus = 'Notion 页面返回 HTTP $statusCode';
+            });
+            unawaited(
+              AppLogger.log('PrivateSearch', 'http error: $statusCode'),
+            );
+          },
           onWebResourceError: (error) {
             if (error.isForMainFrame != true || !mounted) return;
             setState(() {
               _bridgeReady = false;
-              _bridgeStatus = 'Notion 会话加载失败';
+              _bridgeStatus = 'Notion 页面加载失败：${error.description}';
             });
+            unawaited(
+              AppLogger.log('PrivateSearch', 'web error: ${error.description}'),
+            );
           },
         ),
       )
-      ..loadRequest(Uri.parse('https://app.notion.com/'));
+      ..loadRequest(Uri.parse(initialUrl));
   }
 
   @override
@@ -96,6 +143,10 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
 })()
 ''');
       final value = result.toString().replaceAll('"', '').trim();
+      await AppLogger.log(
+        'PrivateSearch',
+        'bridge probe: url=$_bridgeUrl result=$value retry=$_probeRetryCount',
+      );
       if (value == 'ready') {
         if (!mounted) return;
         setState(() => _bridgeReady = true);
@@ -104,14 +155,19 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
 
       if (_probeRetryCount >= 10) {
         if (!mounted) return;
-        setState(() => _bridgeStatus = '等待 Notion 登录');
+        setState(
+          () => _bridgeStatus = _bridgeUrl?.contains('/login') == true
+              ? '等待 Notion 登录'
+              : '页面未提供工作区数据',
+        );
         return;
       }
 
       _probeRetryCount++;
       await Future<void>.delayed(const Duration(seconds: 1));
       await _probeBridge();
-    } catch (_) {
+    } catch (error) {
+      await AppLogger.log('PrivateSearch', 'bridge probe failed: $error');
       if (!mounted || _probeRetryCount >= 10) return;
       _probeRetryCount++;
       await Future<void>.delayed(const Duration(seconds: 1));
@@ -171,6 +227,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
         _error = '搜索失败：$error';
         _hits = [];
       });
+      unawaited(AppLogger.log('PrivateSearch', 'search failed: $error'));
     } finally {
       if (mounted && token == _searchToken) {
         setState(() => _searching = false);
@@ -358,6 +415,30 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
                       leading: const Icon(Icons.person_search),
                       title: const Text('Notion 网页会话'),
                       subtitle: Text(_bridgeStatus),
+                      trailing: _bridgeUrl == null
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.link),
+                              tooltip: '查看会话地址',
+                              onPressed: () {
+                                showDialog<void>(
+                                  context: context,
+                                  builder: (dialogContext) => AlertDialog(
+                                    title: const Text('会话地址'),
+                                    content: SelectableText(
+                                      _bridgeUrl ?? '未获取',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(dialogContext).pop(),
+                                        child: const Text('关闭'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
                     ),
                   ],
                 ),
