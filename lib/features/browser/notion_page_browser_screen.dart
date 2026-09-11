@@ -56,6 +56,11 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       ..setUserAgent(NotionPageBrowserScreen._mobileUserAgent)
       ..enableZoom(true)
       ..setBackgroundColor(Theme.of(context).scaffoldBackgroundColor)
+      ..setOnConsoleMessage((message) {
+        if (message.message.contains('[NOTION-LAYOUT]')) {
+          unawaited(AppLogger.log('Browser', message.message));
+        }
+      })
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (progress) {
@@ -272,6 +277,31 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   function fixContentWidth() {
     var content = document.querySelector('.notion-page-content');
     if (!content) return;
+
+    // 诊断日志：记录 content 及其子元素的布局信息
+    var vw = window.innerWidth;
+    var cs = window.getComputedStyle(content);
+    var rect = content.getBoundingClientRect();
+    var log = 'vw=' + vw + ' content: rect.left=' + Math.round(rect.left) +
+      ' width=' + Math.round(rect.width) +
+      ' maxW=' + cs.maxWidth +
+      ' padL=' + cs.paddingLeft +
+      ' padR=' + cs.paddingRight +
+      ' marL=' + cs.marginLeft +
+      ' marR=' + cs.marginRight;
+    var kids = content.querySelectorAll(':scope > div, :scope > section');
+    for (var k = 0; k < kids.length && k < 3; k++) {
+      var kcs = window.getComputedStyle(kids[k]);
+      var krect = kids[k].getBoundingClientRect();
+      log += ' | child' + k + ': rect.left=' + Math.round(krect.left) +
+        ' width=' + Math.round(krect.width) +
+        ' maxW=' + kcs.maxWidth +
+        ' padL=' + kcs.paddingLeft +
+        ' padR=' + kcs.paddingRight +
+        ' marL=' + kcs.marginLeft +
+        ' marR=' + kcs.marginRight;
+    }
+    console.log('[NOTION-LAYOUT] ' + log);
 
     // 从 content 向上遍历所有父容器，移除宽度约束
     var el = content;
