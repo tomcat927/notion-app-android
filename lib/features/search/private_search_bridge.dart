@@ -335,10 +335,20 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         };
       });
       result = {requestId, status: response.status, results: hits};
-    } catch (error) {
-      result = {requestId, status: response.status, error: bodyText.substring(0, 500)};
-    }
-    post(result);
+      const debug = {
+        spaceId,
+        userId,
+        rawBodyPreview: bodyText.substring(0, 1000),
+        rawBodyLength: bodyText.length,
+        recordCount: records.length,
+        parsedKeys: Object.keys(parsed),
+        firstRecordKeys: records.length > 0 ? Object.keys(records[0]) : []
+      };
+      result = {requestId, status: response.status, results: hits, debug};
+     } catch (error) {
+      result = {requestId, status: response.status, error: bodyText.substring(0, 500), debug: {spaceId, userId, rawBodyPreview: bodyText.substring(0, 1000)}};
+     }
+     post(result);
   }).catch(error => {
     post({requestId, error: String(error)});
   });
@@ -366,13 +376,25 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     final requestId = data['requestId']?.toString() ?? '';
     final status = data['status'];
     final results = data['results'];
-    unawaited(
-      AppLogger.log(
-        'PrivateSearch',
-        'search response: id=$requestId status=$status '
-        'count=${results is List ? results.length : 0}',
-      ),
-    );
+    final isRecents = requestId.startsWith('recents-');
+    final debug = data['debug'];
+    if (isRecents) {
+      unawaited(
+        AppLogger.log(
+          'PrivateSearch',
+          'loadRecentPages response: id=$requestId status=$status '
+          'count=${results is List ? results.length : 0} debug=$debug',
+        ),
+      );
+    } else {
+      unawaited(
+        AppLogger.log(
+          'PrivateSearch',
+          'search response: id=$requestId status=$status '
+          'count=${results is List ? results.length : 0}',
+        ),
+      );
+    }
     final completer = _searchCompleters.remove(requestId);
     if (completer != null && !completer.isCompleted) {
       completer.complete(message.message);

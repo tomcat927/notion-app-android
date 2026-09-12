@@ -66,10 +66,29 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     });
     try {
       final raw = await _bridge.loadRecentPages();
+      unawaited(AppLogger.log(
+        'PrivateSearch',
+        'loadRecentPages raw: ${raw.length > 2000 ? raw.substring(0, 2000) : raw}',
+      ));
       final response = parsePrivateSearchResponse(raw);
+      final hitSummary = response.hits
+          .take(5)
+          .map((h) => '${h.pageId}:${h.title}')
+          .join(', ');
+      unawaited(AppLogger.log(
+        'PrivateSearch',
+        'loadRecentPages parsed: status=${response.status} '
+        'error=${response.error} hits=${response.hits.length} '
+        'first=$hitSummary',
+      ));
       if (!mounted || token != _searchToken) return;
       setState(() {
         if (response.error != null || response.status != 200 || response.hits.isEmpty) {
+          unawaited(AppLogger.log(
+            'PrivateSearch',
+            'loadRecentPages fallback: error=${response.error} '
+            'status=${response.status} hitsEmpty=${response.hits.isEmpty}',
+          ));
           _hits = [];
           unawaited(_loadRecentPages());
         } else {
@@ -82,7 +101,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
         _hits = [];
         unawaited(_loadRecentPages());
       });
-      unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages failed: $error'));
+      unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages exception: $error'));
     } finally {
       if (mounted && token == _searchToken) {
         setState(() => _searching = false);
