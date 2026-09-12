@@ -264,6 +264,97 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     }
   }
 
+  /// Loads server-side recently visited pages via Notion's internal API.
+  Future<String> loadRecentPages() async {
+    final controller = _controller;
+    if (controller == null || !_ready) {
+      throw StateError('Notion 会话未就绪');
+    }
+
+    _searchToken++;
+    final requestId =
+        'recents-${DateTime.now().microsecondsSinceEpoch}-$_searchToken';
+    final completer = Completer<String>();
+    _searchCompleters[requestId] = completer;
+    const searchUserAgent = _searchUserAgent;
+
+    final script = '''
+(() => {
+  const requestId = '$requestId';
+  function post(value) {
+    window.NotionPrivateSearchBridge.postMessage(JSON.stringify(value));
+  }
+  const boot = window.__notion_boot_data || {};
+  const html = document.documentElement?.outerHTML || '';
+  const spaceMatch = html.match(/"spaceId":"([0-9a-f-]{36})"/i);
+  const userMatch = html.match(/"userId":"([0-9a-f-]{36})"/i);
+  const spaceId = boot.spaceId || spaceMatch?.[1] || '';
+  const userId = boot.userId || userMatch?.[1] || '';
+  if (!spaceId) {
+    post({requestId, error: '未读取到当前工作区 ID'});
+    return;
+  }
+  fetch('https://app.notion.com/api/v3/loadCachedRecents', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'content-type': 'application/json',
+      'x-notion-active-user-header': userId,
+      'x-notion-space-id': spaceId,
+      'x-notion-client-version': '23.13.20260910.2358',
+      'user-agent': '$searchUserAgent'
+    },
+    body: JSON.stringify({
+      type: 'PagesInSpace',
+      spaceId: spaceId,
+      limit: 20
+    })
+  }).then(async response => {
+    const bodyText = await response.text();
+    let result;
+    try {
+      const parsed = JSON.parse(bodyText);
+      const records = parsed.records || parsed.results || [];
+      const hits = records.map(item => {
+        const value = item.value || item;
+        const id = item.id || value.id || '';
+        const props = value.properties || {};
+        const titleProp = props.title || {};
+        const titleArr = titleProp.title || titleProp || [];
+        const title = Array.isArray(titleArr)
+          ? titleArr.map(t => t.plain_text || '').join('')
+          : '';
+        return {
+          pageId: id,
+          title: title,
+          pathText: '',
+          snippet: '',
+          highlightBlockId: '',
+          score: 0,
+          snippets: []
+        };
+      });
+      result = {requestId, status: response.status, results: hits};
+    } catch (error) {
+      result = {requestId, status: response.status, error: bodyText.substring(0, 500)};
+    }
+    post(result);
+  }).catch(error => {
+    post({requestId, error: String(error)});
+  });
+})();
+''';
+
+    try {
+      unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages request: $requestId'));
+      await controller.runJavaScript(script);
+      return await completer.future.timeout(const Duration(seconds: 25));
+    } catch (_) {
+      _searchCompleters.remove(requestId);
+      rethrow;
+    }
+  }
+
   void _handleBridgeMessage(JavaScriptMessage message) {
     Map<String, dynamic>? data;
     try {

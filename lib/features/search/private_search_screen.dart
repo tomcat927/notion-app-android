@@ -47,7 +47,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     if (!mounted) return;
     setState(() {});
     if (_bridge.isReady && _searchController.text.trim().isEmpty && _hits.isEmpty && !_searching) {
-      unawaited(_search(''));
+      unawaited(_loadRecentFromApi());
     }
   }
 
@@ -56,12 +56,46 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     if (mounted) setState(() => _recentPages = pages);
   }
 
+  Future<void> _loadRecentFromApi() async {
+    if (!_bridge.isReady) return;
+    _searchToken++;
+    final token = _searchToken;
+    setState(() {
+      _searching = true;
+      _error = null;
+    });
+    try {
+      final raw = await _bridge.loadRecentPages();
+      final response = parsePrivateSearchResponse(raw);
+      if (!mounted || token != _searchToken) return;
+      setState(() {
+        if (response.error != null || response.status != 200 || response.hits.isEmpty) {
+          _hits = [];
+          unawaited(_loadRecentPages());
+        } else {
+          _hits = response.hits;
+        }
+      });
+    } catch (error) {
+      if (!mounted || token != _searchToken) return;
+      setState(() {
+        _hits = [];
+        unawaited(_loadRecentPages());
+      });
+      unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages failed: $error'));
+    } finally {
+      if (mounted && token == _searchToken) {
+        setState(() => _searching = false);
+      }
+    }
+  }
+
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     if (value.trim().isEmpty) {
       _debounce = Timer(
         const Duration(milliseconds: 300),
-        () => unawaited(_search('')),
+        () => unawaited(_loadRecentFromApi()),
       );
       return;
     }
