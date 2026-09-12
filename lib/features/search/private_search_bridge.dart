@@ -329,15 +329,48 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
             : Array.isArray(data?.results)
               ? data.results
               : [];
-      const hits = records.map(item => {
-        const value = item.value || item;
-        const id = item.pageId || item.id || value.pageId || value.id || '';
-        const props = value.properties || item.properties || {};
-        const titleProp = props.title || {};
-        const titleArr = titleProp.title || titleProp || [];
-        const title = Array.isArray(titleArr)
-          ? titleArr.map(t => t.plain_text || '').join('')
-          : (item.title || value.title || '');
+      const visibleRecords = records.slice(0, 20);
+      let syncStatus = 0;
+      let syncBodyText = '';
+      let syncError = '';
+      let blockMap = {};
+      try {
+        const syncResponse = await fetch(
+          'https://app.notion.com/api/v3/syncRecordValues',
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'content-type': 'application/json',
+              'x-notion-active-user-header': userId,
+              'x-notion-space-id': spaceId,
+              'x-notion-client-version': '23.13.20260910.2358'
+            },
+            body: JSON.stringify({
+              requests: visibleRecords.map(item => ({
+                pointer: {
+                  table: 'block',
+                  id: item.pageId || item.id
+                },
+                version: -1
+              }))
+            })
+          }
+        );
+        syncStatus = syncResponse.status;
+        syncBodyText = await syncResponse.text();
+        const syncParsed = JSON.parse(syncBodyText);
+        blockMap = syncParsed?.recordMap?.block || {};
+      } catch (error) {
+        syncError = String(error);
+      }
+      const hits = visibleRecords.map(item => {
+        const id = item.pageId || item.id || '';
+        const value = blockMap[id]?.value;
+        const titleValue = value?.properties?.title;
+        const title = Array.isArray(titleValue)
+          ? titleValue.map(part => Array.isArray(part) ? (part[0] || '') : '').join('')
+          : '';
         return {
           pageId: id,
           title: title,
@@ -356,9 +389,19 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         signalNames: signals.map(signal => signal?.name || ''),
         recentStatus: recentSignal?.status,
         recentDataPreview: JSON.stringify(data || null).substring(0, 1000),
-        recordCount: records.length
+        recordCount: records.length,
+        visibleCount: visibleRecords.length,
+        syncStatus,
+        syncBodyPreview: syncBodyText.substring(0, 1000),
+        syncError,
+        titledCount: hits.filter(hit => hit.title.length > 0).length
       };
-      result = {requestId, status: response.status, results: hits, debug};
+      result = {
+        requestId,
+        status: response.status,
+        results: hits,
+        debug
+      };
     } catch (error) {
       result = {
         requestId,
