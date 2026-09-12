@@ -201,6 +201,10 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
   const userMatch = html.match(/"userId":"([0-9a-f-]{36})"/i);
   const spaceId = boot.spaceId || spaceMatch?.[1] || '';
   const userId = boot.userId || userMatch?.[1] || '';
+  const notionVersion =
+    document.documentElement?.getAttribute('data-notion-version') ||
+    boot.version ||
+    '23.13.20260910.2358';
   if (!spaceId) {
     post({requestId, error: '未读取到当前工作区 ID'});
     return;
@@ -213,7 +217,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       'content-type': 'application/json',
       'x-notion-active-user-header': userId,
       'x-notion-space-id': spaceId,
-      'x-notion-client-version': '23.13.20260910.2358',
+      'x-notion-client-version': notionVersion,
       'user-agent': '$searchUserAgent'
     },
     body: JSON.stringify(payload)
@@ -264,7 +268,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     }
   }
 
-  /// Loads server-side recently visited pages via Notion's user signals API.
+  /// Loads server-side recently visited pages via Notion's internal API.
   Future<String> loadRecentPages() async {
     final controller = _controller;
     if (controller == null || !_ready) {
@@ -290,110 +294,188 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
   const userMatch = html.match(/"userId":"([0-9a-f-]{36})"/i);
   const spaceId = boot.spaceId || spaceMatch?.[1] || '';
   const userId = boot.userId || userMatch?.[1] || '';
+  const notionVersion =
+    document.documentElement?.getAttribute('data-notion-version') ||
+    boot.version ||
+    '23.13.20260910.2358';
   if (!spaceId) {
     post({requestId, error: '未读取到当前工作区 ID'});
     return;
   }
-  fetch('https://app.notion.com/api/v3/getUserSignals', {
+
+  const normalizePageId = id => {
+    const text = String(id || '');
+    const match = text.match(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}/i
+    );
+    const compact = (match?.[0] || text).replace(/-/g, '').toLowerCase();
+    return compact.length === 32 && !/[^0-9a-f]/.test(compact) ? compact : '';
+  };
+  const hyphenatePageId = id => {
+    const compact = normalizePageId(id);
+    if (!compact) return String(id || '');
+    return compact.substring(0, 8) + '-' +
+      compact.substring(8, 12) + '-' +
+      compact.substring(12, 16) + '-' +
+      compact.substring(16, 20) + '-' +
+      compact.substring(20);
+  };
+  const toTimestamp = value => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const numberValue = Number(value);
+      if (Number.isFinite(numberValue)) return numberValue;
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return 0;
+  };
+  const currentPath = window.location.pathname || '';
+  const currentMatches = currentPath.match(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}/ig
+  ) || [];
+  const currentPageKey = normalizePageId(
+    currentMatches.length > 0 ? currentMatches[currentMatches.length - 1] : ''
+  );
+
+  fetch('https://app.notion.com/api/v3/getRecentPageVisits', {
     method: 'POST',
     credentials: 'include',
     headers: {
       'content-type': 'application/json',
       'x-notion-active-user-header': userId,
       'x-notion-space-id': spaceId,
-      'x-notion-client-version': '23.13.20260910.2358',
+      'x-notion-client-version': notionVersion,
       'user-agent': '$searchUserAgent'
     },
     body: JSON.stringify({
       spaceId: spaceId,
-      signals: [{ name: 'recentPages', includeRecords: true }]
+      limit: 50,
+      beforeTimestamp: Date.now()
     })
   }).then(async response => {
     const bodyText = await response.text();
     let result;
     try {
       const parsed = JSON.parse(bodyText);
-      const payload = parsed?.data?.signals ? parsed.data : parsed;
-      const rawSignals = payload?.signals || {};
-      const signals = Array.isArray(rawSignals)
-        ? rawSignals
-        : Object.values(rawSignals);
-      const recentSignal = signals.find(signal => signal?.name === 'recentPages');
-      const data = recentSignal?.data;
-      const records = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.recentPages)
-          ? data.recentPages
-          : Array.isArray(data?.records)
-            ? data.records
-            : Array.isArray(data?.results)
-              ? data.results
-              : [];
+      const rawPages = Array.isArray(parsed?.data?.pages)
+        ? parsed.data.pages
+        : Array.isArray(parsed?.pages)
+          ? parsed.pages
+          : Array.isArray(parsed?.results)
+            ? parsed.results
+            : [];
+      const recordMap = new Map();
+      rawPages.forEach(item => {
+        const rawId = item?.pageId || item?.id || item?.blockId ||
+          item?.pointer?.id || item?.value?.id || '';
+        const key = normalizePageId(rawId);
+        if (!key || key === currentPageKey) return;
+        const visitedAt = toTimestamp(
+          item?.visitedAt ?? item?.timestamp ?? item?.lastVisitedAt ?? item?.time
+        );
+        const pageId = hyphenatePageId(rawId);
+        const existing = recordMap.get(key);
+        if (!existing || visitedAt > existing.visitedAt) {
+          recordMap.set(key, {pageId, visitedAt, raw: item});
+        }
+      });
+      const records = Array.from(recordMap.values()).sort((a, b) =>
+        b.visitedAt - a.visitedAt || a.pageId.localeCompare(b.pageId)
+      );
       const visibleRecords = records.slice(0, 20);
       let syncStatus = 0;
       let syncBodyText = '';
       let syncError = '';
       let blockMap = {};
-      try {
-        const syncResponse = await fetch(
-          'https://app.notion.com/api/v3/syncRecordValues',
-          {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-              'content-type': 'application/json',
-              'x-notion-active-user-header': userId,
-              'x-notion-space-id': spaceId,
-              'x-notion-client-version': '23.13.20260910.2358'
-            },
-            body: JSON.stringify({
-              requests: visibleRecords.map(item => ({
-                pointer: {
-                  table: 'block',
-                  id: item.pageId || item.id
-                },
-                version: -1
-              }))
-            })
-          }
-        );
-        syncStatus = syncResponse.status;
-        syncBodyText = await syncResponse.text();
-        const syncParsed = JSON.parse(syncBodyText);
-        blockMap = syncParsed?.recordMap?.block || {};
-      } catch (error) {
-        syncError = String(error);
+      if (visibleRecords.length > 0) {
+        try {
+          const syncResponse = await fetch(
+            'https://app.notion.com/api/v3/syncRecordValues',
+            {
+              method: 'POST',
+              credentials: 'include',
+              headers: {
+                'content-type': 'application/json',
+                'x-notion-active-user-header': userId,
+                'x-notion-space-id': spaceId,
+                'x-notion-client-version': notionVersion
+              },
+              body: JSON.stringify({
+                requests: visibleRecords.map(item => ({
+                  pointer: {
+                    table: 'block',
+                    id: item.pageId
+                  },
+                  version: -1
+                }))
+              })
+            }
+          );
+          syncStatus = syncResponse.status;
+          syncBodyText = await syncResponse.text();
+          const syncParsed = JSON.parse(syncBodyText);
+          blockMap = syncParsed?.recordMap?.block || {};
+        } catch (error) {
+          syncError = String(error);
+        }
       }
+      const blockValueFor = id => {
+        const compact = normalizePageId(id);
+        const hyphenated = hyphenatePageId(id);
+        const direct = blockMap[id] || blockMap[hyphenated] || blockMap[compact];
+        if (direct) return direct?.value?.value ?? direct?.value ?? direct;
+        for (const key of Object.keys(blockMap)) {
+          if (normalizePageId(key) === compact) {
+            const record = blockMap[key];
+            return record?.value?.value ?? record?.value ?? record;
+          }
+        }
+        return null;
+      };
+      const plainText = value => {
+        if (Array.isArray(value)) {
+          return value.map(part => {
+            if (Array.isArray(part)) return part[0] || '';
+            if (part && typeof part === 'object') {
+              return part.plain_text || part.text?.content || part.content || '';
+            }
+            return part || '';
+          }).join('');
+        }
+        if (value && typeof value === 'object') {
+          return value.plain_text || value.text?.content || value.content || '';
+        }
+        return typeof value === 'string' ? value : '';
+      };
+      const titleFor = (item, value) => {
+        const titleValue = value?.properties?.title ??
+          value?.properties?.Name ??
+          item.raw?.title ??
+          item.raw?.name;
+        return plainText(titleValue).trim();
+      };
       const hits = visibleRecords.map(item => {
-        const id = item.pageId || item.id || '';
-        const record = blockMap[id]?.value;
-        const value = record?.value ?? record;
-        const titleValue = value?.properties?.title;
-        const title = Array.isArray(titleValue)
-          ? titleValue.map(part => {
-              if (Array.isArray(part)) return part[0] || '';
-              if (part && typeof part === 'object') return part.plain_text || '';
-              return part || '';
-            }).join('')
-          : (typeof titleValue === 'string' ? titleValue : '');
+        const value = blockValueFor(item.pageId);
         return {
-          pageId: id,
-          title: title,
+          pageId: item.pageId,
+          title: titleFor(item, value),
           pathText: '',
           snippet: '',
           highlightBlockId: '',
-          score: 0,
+          score: item.visitedAt || 0,
           snippets: []
         };
       });
       const debug = {
         spaceId,
         userId,
+        notionVersion,
+        apiType: parsed?.type || '',
         rawBodyPreview: bodyText.substring(0, 1000),
         rawBodyLength: bodyText.length,
-        signalNames: signals.map(signal => signal?.name || ''),
-        recentStatus: recentSignal?.status,
-        recentDataPreview: JSON.stringify(data || null).substring(0, 1000),
+        rawPageCount: rawPages.length,
+        currentPageKey,
         recordCount: records.length,
         visibleCount: visibleRecords.length,
         syncStatus,
@@ -405,6 +487,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         requestId,
         status: response.status,
         results: hits,
+        error: response.ok ? undefined : bodyText.substring(0, 500),
         debug
       };
     } catch (error) {
