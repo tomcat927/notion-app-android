@@ -388,51 +388,90 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       let syncBodyText = '';
       let syncError = '';
       let blockMap = {};
+      let parentSyncStatus = 0;
+      let parentSyncError = '';
+      let collectionMap = {};
+      let parentBlockMap = {};
+      const unwrapRecord = record => record?.value?.value ?? record?.value ?? record;
+      const valueFromMap = (map, id) => {
+        const compact = normalizePageId(id);
+        const hyphenated = hyphenatePageId(id);
+        const direct = map[id] || map[hyphenated] || map[compact];
+        if (direct) return unwrapRecord(direct);
+        for (const key of Object.keys(map)) {
+          if (normalizePageId(key) === compact) return unwrapRecord(map[key]);
+        }
+        return null;
+      };
+      const syncRecordValues = async requests => {
+        const syncResponse = await fetch(
+          'https://app.notion.com/api/v3/syncRecordValues',
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'content-type': 'application/json',
+              'x-notion-active-user-header': userId,
+              'x-notion-space-id': spaceId,
+              'x-notion-client-version': notionVersion
+            },
+            body: JSON.stringify({requests})
+          }
+        );
+        return {
+          status: syncResponse.status,
+          bodyText: await syncResponse.text()
+        };
+      };
       if (candidateRecords.length > 0) {
         try {
-          const syncResponse = await fetch(
-            'https://app.notion.com/api/v3/syncRecordValues',
-            {
-              method: 'POST',
-              credentials: 'include',
-              headers: {
-                'content-type': 'application/json',
-                'x-notion-active-user-header': userId,
-                'x-notion-space-id': spaceId,
-                'x-notion-client-version': notionVersion
-              },
-              body: JSON.stringify({
-                requests: candidateRecords.map(item => ({
-                  pointer: {
-                    table: 'block',
-                    id: item.pageId
-                  },
-                  version: -1
-                }))
-              })
-            }
-          );
-          syncStatus = syncResponse.status;
-          syncBodyText = await syncResponse.text();
+          const synced = await syncRecordValues(candidateRecords.map(item => ({
+            pointer: {
+              table: 'block',
+              id: item.pageId
+            },
+            version: -1
+          })));
+          syncStatus = synced.status;
+          syncBodyText = synced.bodyText;
           const syncParsed = JSON.parse(syncBodyText);
           blockMap = syncParsed?.recordMap?.block || {};
         } catch (error) {
           syncError = String(error);
         }
       }
-      const blockValueFor = id => {
-        const compact = normalizePageId(id);
-        const hyphenated = hyphenatePageId(id);
-        const direct = blockMap[id] || blockMap[hyphenated] || blockMap[compact];
-        if (direct) return direct?.value?.value ?? direct?.value ?? direct;
-        for (const key of Object.keys(blockMap)) {
-          if (normalizePageId(key) === compact) {
-            const record = blockMap[key];
-            return record?.value?.value ?? record?.value ?? record;
-          }
+      const parentRequests = [];
+      const parentRequestKeys = new Set();
+      candidateRecords.forEach(item => {
+        const value = valueFromMap(blockMap, item.pageId);
+        const parentTable = value?.parent_table;
+        const parentId = value?.parent_id;
+        if ((parentTable !== 'collection' && parentTable !== 'block') || !parentId) return;
+        const key = parentTable + ':' + normalizePageId(parentId);
+        if (parentRequestKeys.has(key)) return;
+        parentRequestKeys.add(key);
+        parentRequests.push({
+          pointer: {
+            table: parentTable,
+            id: hyphenatePageId(parentId)
+          },
+          version: -1
+        });
+      });
+      if (parentRequests.length > 0) {
+        try {
+          const parentSynced = await syncRecordValues(parentRequests);
+          parentSyncStatus = parentSynced.status;
+          const parentParsed = JSON.parse(parentSynced.bodyText);
+          collectionMap = parentParsed?.recordMap?.collection || {};
+          parentBlockMap = parentParsed?.recordMap?.block || {};
+        } catch (error) {
+          parentSyncError = String(error);
         }
-        return null;
-      };
+      }
+      const blockValueFor = id => valueFromMap(blockMap, id);
+      const collectionValueFor = id => valueFromMap(collectionMap, id);
+      const parentBlockValueFor = id => valueFromMap(parentBlockMap, id);
       const plainText = value => {
         if (Array.isArray(value)) {
           return value.map(part => {
@@ -451,12 +490,28 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       const rawNameFor = item => plainText(
         item?.raw?.name ?? item?.raw?.title ?? item?.raw?.text ?? ''
       ).trim();
-      const titleFor = (item, value) => {
+      const recordTitleFor = value => {
         const titleValue = value?.properties?.title ??
           value?.properties?.Name ??
-          item.raw?.title ??
-          item.raw?.name;
+          value?.name ??
+          value?.title;
         return plainText(titleValue).trim();
+      };
+      const titleFor = (item, value) => {
+        const title = recordTitleFor(value);
+        if (title) return title;
+        return plainText(item.raw?.title ?? item.raw?.name).trim();
+      };
+      const pathFor = value => {
+        const parentTable = value?.parent_table;
+        const parentId = value?.parent_id;
+        if (!parentTable || !parentId) return '';
+        const parentValue = parentTable === 'collection'
+          ? collectionValueFor(parentId)
+          : parentTable === 'block'
+            ? parentBlockValueFor(parentId)
+            : null;
+        return recordTitleFor(parentValue);
       };
       const isSyntheticHomeRecord = (item, value, title) => {
         const rawName = rawNameFor(item);
@@ -468,11 +523,13 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         const value = blockValueFor(item.pageId);
         const title = titleFor(item, value);
         const rawName = rawNameFor(item);
+        const pathText = pathFor(value);
         return {
           item,
           value,
           rawName,
           title,
+          pathText: pathText === title ? '' : pathText,
           filtered: isSyntheticHomeRecord(item, value, title)
         };
       });
@@ -482,7 +539,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         .map(entry => ({
           pageId: entry.item.pageId,
           title: entry.title || entry.rawName,
-          pathText: '',
+          pathText: entry.pathText,
           snippet: '',
           highlightBlockId: '',
           score: entry.item.visitedAt || 0,
@@ -496,6 +553,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         type: entry.value?.type || '',
         parentTable: entry.value?.parent_table || '',
         parentId: entry.value?.parent_id || '',
+        pathText: entry.pathText,
         filtered: entry.filtered
       });
       const debug = {
@@ -511,6 +569,9 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         visibleCount: hits.length,
         syncStatus,
         syncError,
+        parentRequestCount: parentRequests.length,
+        parentSyncStatus,
+        parentSyncError,
         titledCount: hits.filter(hit => hit.title.length > 0).length,
         rawRecentPreview: rawPages.slice(0, 12).map(item => ({
           id: item?.pageId || item?.id || item?.blockId || item?.pointer?.id || '',
@@ -521,6 +582,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         shownRecentPreview: hits.slice(0, 12).map(hit => ({
           id: hit.pageId,
           title: hit.title,
+          pathText: hit.pathText,
           visitedAt: hit.score
         })),
         rawBodyPreview: response.ok ? '' : bodyText.substring(0, 1000),

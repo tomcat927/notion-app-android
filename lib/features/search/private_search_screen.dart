@@ -299,23 +299,18 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       );
     }
 
+    final rows = queryIsEmpty ? _buildGroupedHitRows(_hits) : _hits;
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-      itemCount: _hits.length + (queryIsEmpty ? 1 : 0),
+      itemCount: rows.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
-        if (queryIsEmpty && index == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 4),
-            child: Text(
-              '最近访问',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: Colors.grey,
-                  ),
-            ),
-          );
+        final row = rows[index];
+        if (row is _RecentSectionHeader) {
+          return _buildSectionHeader(row.label);
         }
-        final hit = _hits[queryIsEmpty ? index - 1 : index];
+        final hit = row as PrivateSearchHit;
+        final titleStyle = Theme.of(context).textTheme.titleMedium!;
         return Card(
           child: InkWell(
             borderRadius: BorderRadius.circular(8),
@@ -326,15 +321,17 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text.rich(
-                    _buildHighlightedText(
-                      hit.title,
-                      _searchController.text.trim(),
-                      Theme.of(context).textTheme.titleMedium!,
-                    ),
+                    queryIsEmpty
+                        ? _buildRecentTitleText(hit, titleStyle)
+                        : _buildHighlightedText(
+                            hit.title,
+                            _searchController.text.trim(),
+                            titleStyle,
+                          ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  if (hit.pathText.isNotEmpty) ...[
+                  if (!queryIsEmpty && hit.pathText.isNotEmpty) ...[
                     const SizedBox(height: 4),
                     Text(
                       hit.pathText,
@@ -365,12 +362,17 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   }
 
   Widget _buildRecentPages() {
+    final rows = _buildGroupedRecentRows(_recentPages);
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-      itemCount: _recentPages.length,
+      itemCount: rows.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
-        final page = _recentPages[index];
+        final row = rows[index];
+        if (row is _RecentSectionHeader) {
+          return _buildSectionHeader(row.label);
+        }
+        final page = row as RecentPage;
         return Card(
           child: InkWell(
             borderRadius: BorderRadius.circular(8),
@@ -406,6 +408,76 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildSectionHeader(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: Colors.grey,
+            ),
+      ),
+    );
+  }
+
+  List<Object> _buildGroupedHitRows(List<PrivateSearchHit> hits) {
+    final rows = <Object>[];
+    String? previousLabel;
+    for (final hit in hits) {
+      final label = _recentSectionLabel(hit.score);
+      if (label != previousLabel) {
+        rows.add(_RecentSectionHeader(label));
+        previousLabel = label;
+      }
+      rows.add(hit);
+    }
+    return rows;
+  }
+
+  List<Object> _buildGroupedRecentRows(List<RecentPage> pages) {
+    final rows = <Object>[];
+    String? previousLabel;
+    for (final page in pages) {
+      final label = _recentSectionLabel(
+        page.visitedAt.millisecondsSinceEpoch.toDouble(),
+      );
+      if (label != previousLabel) {
+        rows.add(_RecentSectionHeader(label));
+        previousLabel = label;
+      }
+      rows.add(page);
+    }
+    return rows;
+  }
+
+  String _recentSectionLabel(double timestamp) {
+    if (timestamp <= 0) return '更早';
+    final visited = DateTime.fromMillisecondsSinceEpoch(timestamp.round());
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final visitedDate = DateTime(visited.year, visited.month, visited.day);
+    final days = today.difference(visitedDate).inDays;
+    if (days <= 0) return '今天';
+    if (days == 1) return '昨天';
+    return '更早';
+  }
+
+  TextSpan _buildRecentTitleText(PrivateSearchHit hit, TextStyle baseStyle) {
+    if (hit.pathText.isEmpty) {
+      return TextSpan(text: hit.title, style: baseStyle);
+    }
+    return TextSpan(
+      style: baseStyle,
+      children: [
+        TextSpan(text: hit.title),
+        TextSpan(
+          text: ' - ${hit.pathText}',
+          style: baseStyle.copyWith(color: Colors.grey),
+        ),
+      ],
     );
   }
 
@@ -446,4 +518,10 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     }
     return TextSpan(children: spans);
   }
+}
+
+class _RecentSectionHeader {
+  const _RecentSectionHeader(this.label);
+
+  final String label;
 }
