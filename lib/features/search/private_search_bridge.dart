@@ -366,11 +366,16 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       }
       const hits = visibleRecords.map(item => {
         const id = item.pageId || item.id || '';
-        const value = blockMap[id]?.value;
+        const record = blockMap[id]?.value;
+        const value = record?.value ?? record;
         const titleValue = value?.properties?.title;
         const title = Array.isArray(titleValue)
-          ? titleValue.map(part => Array.isArray(part) ? (part[0] || '') : '').join('')
-          : '';
+          ? titleValue.map(part => {
+              if (Array.isArray(part)) return part[0] || '';
+              if (part && typeof part === 'object') return part.plain_text || '';
+              return part || '';
+            }).join('')
+          : (typeof titleValue === 'string' ? titleValue : '');
         return {
           pageId: id,
           title: title,
