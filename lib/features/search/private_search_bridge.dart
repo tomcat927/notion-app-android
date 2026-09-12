@@ -370,7 +370,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         const rawId = item?.pageId || item?.id || item?.blockId ||
           item?.pointer?.id || item?.value?.id || '';
         const key = normalizePageId(rawId);
-        if (!key || key === currentPageKey) return;
+        if (!key) return;
         const visitedAt = toTimestamp(
           item?.visitedAt ?? item?.timestamp ?? item?.lastVisitedAt ?? item?.time
         );
@@ -383,12 +383,12 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       const records = Array.from(recordMap.values()).sort((a, b) =>
         b.visitedAt - a.visitedAt || a.pageId.localeCompare(b.pageId)
       );
-      const visibleRecords = records.slice(0, 20);
+      const candidateRecords = records.slice(0, 30);
       let syncStatus = 0;
       let syncBodyText = '';
       let syncError = '';
       let blockMap = {};
-      if (visibleRecords.length > 0) {
+      if (candidateRecords.length > 0) {
         try {
           const syncResponse = await fetch(
             'https://app.notion.com/api/v3/syncRecordValues',
@@ -402,7 +402,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
                 'x-notion-client-version': notionVersion
               },
               body: JSON.stringify({
-                requests: visibleRecords.map(item => ({
+                requests: candidateRecords.map(item => ({
                   pointer: {
                     table: 'block',
                     id: item.pageId
@@ -448,6 +448,9 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
         }
         return typeof value === 'string' ? value : '';
       };
+      const rawNameFor = item => plainText(
+        item?.raw?.name ?? item?.raw?.title ?? item?.raw?.text ?? ''
+      ).trim();
       const titleFor = (item, value) => {
         const titleValue = value?.properties?.title ??
           value?.properties?.Name ??
@@ -455,33 +458,73 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
           item.raw?.name;
         return plainText(titleValue).trim();
       };
-      const hits = visibleRecords.map(item => {
+      const isSyntheticHomeRecord = (item, value, title) => {
+        const rawName = rawNameFor(item);
+        if (!rawName || !title || rawName === title) return false;
+        if (rawName !== '首页' && rawName.toLowerCase() !== 'home') return false;
+        return value?.parent_table === 'space' || value?.type === 'collection_view_page';
+      };
+      const mappedCandidates = candidateRecords.map(item => {
         const value = blockValueFor(item.pageId);
+        const title = titleFor(item, value);
+        const rawName = rawNameFor(item);
         return {
-          pageId: item.pageId,
-          title: titleFor(item, value),
+          item,
+          value,
+          rawName,
+          title,
+          filtered: isSyntheticHomeRecord(item, value, title)
+        };
+      });
+      const hits = mappedCandidates
+        .filter(entry => !entry.filtered)
+        .slice(0, 20)
+        .map(entry => ({
+          pageId: entry.item.pageId,
+          title: entry.title || entry.rawName,
           pathText: '',
           snippet: '',
           highlightBlockId: '',
-          score: item.visitedAt || 0,
+          score: entry.item.visitedAt || 0,
           snippets: []
-        };
+        }));
+      const previewEntry = entry => ({
+        id: entry.item.pageId,
+        rawName: entry.rawName,
+        title: entry.title,
+        visitedAt: entry.item.visitedAt,
+        type: entry.value?.type || '',
+        parentTable: entry.value?.parent_table || '',
+        parentId: entry.value?.parent_id || '',
+        filtered: entry.filtered
       });
       const debug = {
         spaceId,
         userId,
         notionVersion,
         apiType: parsed?.type || '',
-        rawBodyPreview: bodyText.substring(0, 1000),
         rawBodyLength: bodyText.length,
         rawPageCount: rawPages.length,
         currentPageKey,
         recordCount: records.length,
-        visibleCount: visibleRecords.length,
+        candidateCount: candidateRecords.length,
+        visibleCount: hits.length,
         syncStatus,
-        syncBodyPreview: syncBodyText.substring(0, 1000),
         syncError,
-        titledCount: hits.filter(hit => hit.title.length > 0).length
+        titledCount: hits.filter(hit => hit.title.length > 0).length,
+        rawRecentPreview: rawPages.slice(0, 12).map(item => ({
+          id: item?.pageId || item?.id || item?.blockId || item?.pointer?.id || '',
+          name: item?.name || item?.title || '',
+          visitedAt: item?.visitedAt ?? item?.timestamp ?? item?.lastVisitedAt ?? item?.time ?? ''
+        })),
+        mappedRecentPreview: mappedCandidates.slice(0, 12).map(previewEntry),
+        shownRecentPreview: hits.slice(0, 12).map(hit => ({
+          id: hit.pageId,
+          title: hit.title,
+          visitedAt: hit.score
+        })),
+        rawBodyPreview: response.ok ? '' : bodyText.substring(0, 1000),
+        syncBodyPreview: syncStatus === 200 ? '' : syncBodyText.substring(0, 1000)
       };
       result = {
         requestId,
