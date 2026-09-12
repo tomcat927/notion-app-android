@@ -73,7 +73,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       final response = parsePrivateSearchResponse(raw);
       final hitSummary = response.hits
           .take(5)
-          .map((h) => '${h.pageId}:${h.title}')
+          .map((hit) => '${hit.pageId}:${hit.title}')
           .join(', ');
       unawaited(AppLogger.log(
         'PrivateSearch',
@@ -101,7 +101,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
         _hits = [];
         unawaited(_loadRecentPages());
       });
-      unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages exception: $error'));
+      unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages failed: $error'));
     } finally {
       if (mounted && token == _searchToken) {
         setState(() => _searching = false);

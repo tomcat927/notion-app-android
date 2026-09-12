@@ -264,7 +264,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     }
   }
 
-  /// Loads server-side recently visited pages via Notion's internal API.
+  /// Loads server-side recently visited pages via Notion's user signals API.
   Future<String> loadRecentPages() async {
     final controller = _controller;
     if (controller == null || !_ready) {
@@ -294,7 +294,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     post({requestId, error: '未读取到当前工作区 ID'});
     return;
   }
-  fetch('https://app.notion.com/api/v3/loadCachedRecents', {
+  fetch('https://app.notion.com/api/v3/getUserSignals', {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -305,25 +305,39 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
       'user-agent': '$searchUserAgent'
     },
     body: JSON.stringify({
-      type: 'PagesInSpace',
       spaceId: spaceId,
-      limit: 20
+      signals: [{ name: 'recentPages', includeRecords: true }]
     })
   }).then(async response => {
     const bodyText = await response.text();
     let result;
     try {
       const parsed = JSON.parse(bodyText);
-      const records = parsed.records || parsed.results || [];
+      const payload = parsed?.data?.signals ? parsed.data : parsed;
+      const rawSignals = payload?.signals || {};
+      const signals = Array.isArray(rawSignals)
+        ? rawSignals
+        : Object.values(rawSignals);
+      const recentSignal = signals.find(signal => signal?.name === 'recentPages');
+      const data = recentSignal?.data;
+      const records = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.recentPages)
+          ? data.recentPages
+          : Array.isArray(data?.records)
+            ? data.records
+            : Array.isArray(data?.results)
+              ? data.results
+              : [];
       const hits = records.map(item => {
         const value = item.value || item;
-        const id = item.id || value.id || '';
-        const props = value.properties || {};
+        const id = item.pageId || item.id || value.pageId || value.id || '';
+        const props = value.properties || item.properties || {};
         const titleProp = props.title || {};
         const titleArr = titleProp.title || titleProp || [];
         const title = Array.isArray(titleArr)
           ? titleArr.map(t => t.plain_text || '').join('')
-          : '';
+          : (item.title || value.title || '');
         return {
           pageId: id,
           title: title,
@@ -334,21 +348,26 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
           snippets: []
         };
       });
-      result = {requestId, status: response.status, results: hits};
       const debug = {
         spaceId,
         userId,
         rawBodyPreview: bodyText.substring(0, 1000),
         rawBodyLength: bodyText.length,
-        recordCount: records.length,
-        parsedKeys: Object.keys(parsed),
-        firstRecordKeys: records.length > 0 ? Object.keys(records[0]) : []
+        signalNames: signals.map(signal => signal?.name || ''),
+        recentStatus: recentSignal?.status,
+        recentDataPreview: JSON.stringify(data || null).substring(0, 1000),
+        recordCount: records.length
       };
       result = {requestId, status: response.status, results: hits, debug};
-     } catch (error) {
-      result = {requestId, status: response.status, error: bodyText.substring(0, 500), debug: {spaceId, userId, rawBodyPreview: bodyText.substring(0, 1000)}};
-     }
-     post(result);
+    } catch (error) {
+      result = {
+        requestId,
+        status: response.status,
+        error: bodyText.substring(0, 500),
+        debug: {spaceId, userId, rawBodyPreview: bodyText.substring(0, 1000)}
+      };
+    }
+    post(result);
   }).catch(error => {
     post({requestId, error: String(error)});
   });
