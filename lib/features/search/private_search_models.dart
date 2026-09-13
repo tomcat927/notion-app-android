@@ -15,6 +15,7 @@ class PrivateSearchHit {
     required this.pageId,
     required this.title,
     required this.pathText,
+    required this.type,
     required this.primarySnippet,
     required this.primaryBlockId,
     required this.score,
@@ -24,6 +25,7 @@ class PrivateSearchHit {
   final String pageId;
   final String title;
   final String pathText;
+  final String type;
   final String primarySnippet;
   final String primaryBlockId;
   final double score;
@@ -88,6 +90,7 @@ PrivateSearchResponse parsePrivateSearchResponse(String raw) {
           pageId: pageId,
           title: title.isEmpty ? '无标题页面' : title,
           pathText: pathText,
+          type: rawResult['type']?.toString() ?? '',
           primarySnippet: primarySnippet,
           primaryBlockId: rawResult['highlightBlockId']?.toString() ??
               (snippets.isEmpty ? '' : snippets.first.blockId),

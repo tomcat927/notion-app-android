@@ -240,6 +240,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
           pageId: item.id || '',
           title: highlight.title || highlights.titleHighlight || rankingSignals.TITLE || '',
           pathText: highlight.pathText || highlights.pathTextHighlight || rankingSignals.PATH_TEXT || '',
+          type: item.type || item.blockType || '',
           snippet: highlight.text || snippets[0]?.text || '',
           highlightBlockId:
             item.highlightBlockId || snippets[0]?.blockId || '',
@@ -540,6 +541,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
           pageId: entry.item.pageId,
           title: entry.title || entry.rawName,
           pathText: entry.pathText,
+          type: entry.value?.type || '',
           snippet: '',
           highlightBlockId: '',
           score: entry.item.visitedAt || 0,
@@ -583,6 +585,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
           id: hit.pageId,
           title: hit.title,
           pathText: hit.pathText,
+          type: hit.type,
           visitedAt: hit.score
         })),
         rawBodyPreview: response.ok ? '' : bodyText.substring(0, 1000),

@@ -23,6 +23,8 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   Timer? _debounce;
   int _searchToken = 0;
   bool _searching = false;
+  bool _showCachedRecentPages = false;
+  bool _recentServerLoadFinished = false;
   String? _error;
   List<PrivateSearchHit> _hits = [];
   List<RecentPage> _recentPages = [];
@@ -32,7 +34,12 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     super.initState();
     _bridge.addListener(_onBridgeChanged);
     _bridge.start(seedPageId: widget.bridgePageId);
-    unawaited(_loadRecentPages());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_bridge.isReady && _searchController.text.trim().isEmpty) {
+        unawaited(_loadRecentFromApi());
+      }
+    });
   }
 
   @override
@@ -62,6 +69,8 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     final token = _searchToken;
     setState(() {
       _searching = true;
+      _showCachedRecentPages = false;
+      _recentServerLoadFinished = false;
       _error = null;
     });
     try {
@@ -90,8 +99,10 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
             'status=${response.status} hitsEmpty=${response.hits.isEmpty}',
           ));
           _hits = [];
+          _showCachedRecentPages = true;
           unawaited(_loadRecentPages());
         } else {
+          _showCachedRecentPages = false;
           _hits = response.hits;
         }
       });
@@ -99,12 +110,16 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       if (!mounted || token != _searchToken) return;
       setState(() {
         _hits = [];
+        _showCachedRecentPages = true;
         unawaited(_loadRecentPages());
       });
       unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages failed: $error'));
     } finally {
       if (mounted && token == _searchToken) {
-        setState(() => _searching = false);
+        setState(() {
+          _searching = false;
+          _recentServerLoadFinished = true;
+        });
       }
     }
   }
@@ -169,6 +184,11 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   }
 
   void _reloadBridge() {
+    setState(() {
+      _hits = [];
+      _showCachedRecentPages = false;
+      _recentServerLoadFinished = false;
+    });
     _bridge.reload();
   }
 
@@ -285,8 +305,13 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       return const Center(child: CircularProgressIndicator());
     }
     final queryIsEmpty = _searchController.text.trim().isEmpty;
+    if (queryIsEmpty &&
+        !_showCachedRecentPages &&
+        (!_bridge.isReady || !_recentServerLoadFinished)) {
+      return const Center(child: CircularProgressIndicator());
+    }
     if (_hits.isEmpty) {
-      if (queryIsEmpty && _recentPages.isNotEmpty) {
+      if (queryIsEmpty && _showCachedRecentPages && _recentPages.isNotEmpty) {
         return _buildRecentPages();
       }
       return Center(
@@ -317,41 +342,53 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
             onTap: () => _openHit(hit),
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  Text.rich(
-                    queryIsEmpty
-                        ? _buildRecentTitleText(hit, titleStyle)
-                        : _buildHighlightedText(
-                            hit.title,
-                            _searchController.text.trim(),
-                            titleStyle,
-                          ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                  Icon(
+                    _iconForHit(hit),
+                    size: 22,
+                    color: Colors.grey,
                   ),
-                  if (!queryIsEmpty && hit.pathText.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      hit.pathText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text.rich(
+                          queryIsEmpty
+                              ? _buildRecentTitleText(hit, titleStyle)
+                              : _buildHighlightedText(
+                                  hit.title,
+                                  _searchController.text.trim(),
+                                  titleStyle,
+                                ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (!queryIsEmpty && hit.pathText.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            hit.pathText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                        if (hit.primarySnippet.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text.rich(
+                            _buildHighlightedText(
+                              hit.primarySnippet,
+                              _searchController.text.trim(),
+                              Theme.of(context).textTheme.bodyMedium!,
+                            ),
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
                     ),
-                  ],
-                  if (hit.primarySnippet.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text.rich(
-                      _buildHighlightedText(
-                        hit.primarySnippet,
-                        _searchController.text.trim(),
-                        Theme.of(context).textTheme.bodyMedium!,
-                      ),
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+                  ),
                 ],
               ),
             ),
@@ -462,7 +499,19 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     final days = today.difference(visitedDate).inDays;
     if (days <= 0) return '今天';
     if (days == 1) return '昨天';
+    if (days <= 7) return '上周';
     return '更早';
+  }
+
+  IconData _iconForHit(PrivateSearchHit hit) {
+    switch (hit.type) {
+      case 'collection_view_page':
+      case 'collection_view':
+      case 'collection':
+        return Icons.table_chart_outlined;
+      default:
+        return Icons.description_outlined;
+    }
   }
 
   TextSpan _buildRecentTitleText(PrivateSearchHit hit, TextStyle baseStyle) {
