@@ -6,4 +6,9 @@
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+    <style name="LogViewerTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F7F8FA</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#4C9AFF</item>
+    </style>
 </resources>
