@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/notion_auth.dart';
 import '../../core/notion_client.dart';
 import '../../core/app_logger.dart';
+import '../../core/native_browser.dart';
 import '../../core/update_service.dart';
 import '../auth/login_screen.dart';
 import '../browser/notion_page_browser_screen.dart';
@@ -495,11 +496,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _hasMore = data['has_more'] == true;
         _loading = false;
       });
-      if (results.isNotEmpty) {
-        _privateSearchBridge.start(
-          seedPageId: results.first['id']?.toString(),
-        );
-      }
     } catch (error) {
       if (generation != _loadGeneration || !mounted) return;
       await AppLogger.log('Home', '加载记录失败: $error');
@@ -1066,11 +1062,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
       body: Stack(
         children: [
-          Positioned(
-            left: 0,
-            top: 0,
-            child: _privateSearchBridge.buildHiddenWebView(),
-          ),
           Positioned.fill(child: _buildContent()),
         ],
       ),
@@ -1440,14 +1431,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final title = _pageTitle(page);
     unawaited(RecentPagesService.addRecentPage(pageId, title));
+    if (_privateSearchBridge.hasController) {
+      await AppLogger.log('Home', '打开笔记前释放隐藏搜索 WebView: $pageId');
+      _privateSearchBridge.reset();
+    }
     await AppLogger.log('Home', '使用内嵌浏览器打开: $pageId');
 
-    if (!mounted) return;
+    final opened = await NativeBrowser.openPage(pageId: pageId, title: title);
+    if (opened || !mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => NotionPageBrowserScreen(
           pageId: pageId,
-          title: _pageTitle(page),
+          title: title,
         ),
       ),
     );

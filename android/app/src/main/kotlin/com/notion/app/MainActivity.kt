@@ -61,6 +61,18 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.notion.app/browser")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "openPage" -> openPageBrowser(
+                        call.argument<String>("pageId"),
+                        call.argument<String>("title"),
+                        result,
+                    )
+                    else -> result.notImplemented()
+                }
+            }
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.notion.app/crash_logs")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -221,6 +233,24 @@ class MainActivity : FlutterActivity() {
             result.success(uri.toString())
         } catch (error: Exception) {
             result.error("file_uri_failed", error.message ?: "无法生成 content URI", null)
+        }
+    }
+
+    private fun openPageBrowser(pageId: String?, title: String?, result: MethodChannel.Result) {
+        if (pageId.isNullOrBlank()) {
+            result.error("invalid_argument", "缺少页面 ID", null)
+            return
+        }
+
+        try {
+            val intent = Intent(this, BrowserActivity::class.java).apply {
+                putExtra(BrowserActivity.EXTRA_PAGE_ID, pageId)
+                putExtra(BrowserActivity.EXTRA_TITLE, title.orEmpty())
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (error: Exception) {
+            result.error("browser_open_failed", error.message ?: "无法打开内嵌浏览器", null)
         }
     }
 

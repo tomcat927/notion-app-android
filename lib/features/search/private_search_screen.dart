@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/native_browser.dart';
 import '../browser/notion_page_browser_screen.dart';
 import 'private_search_bridge.dart';
 import 'private_search_models.dart';
@@ -47,6 +48,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     _debounce?.cancel();
     _searchController.dispose();
     _bridge.removeListener(_onBridgeChanged);
+    _bridge.reset();
     super.dispose();
   }
 
@@ -189,19 +191,39 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       _showCachedRecentPages = false;
       _recentServerLoadFinished = false;
     });
-    _bridge.reload();
+    if (_bridge.hasController) {
+      _bridge.reload();
+    } else {
+      _bridge.start(seedPageId: widget.bridgePageId);
+    }
   }
 
-  void _openHit(PrivateSearchHit hit) {
-    unawaited(RecentPagesService.addRecentPage(hit.pageId, hit.title));
-    Navigator.of(context).push(
+  Future<void> _openHit(PrivateSearchHit hit) async {
+    await _openPage(hit.pageId, hit.title);
+  }
+
+  Future<void> _openRecentPage(RecentPage page) async {
+    await _openPage(page.pageId, page.title);
+  }
+
+  Future<void> _openPage(String pageId, String title) async {
+    unawaited(RecentPagesService.addRecentPage(pageId, title));
+    await AppLogger.log('PrivateSearch', '打开笔记前释放隐藏搜索 WebView: $pageId');
+    _bridge.reset();
+    if (!mounted) return;
+    final opened = await NativeBrowser.openPage(pageId: pageId, title: title);
+    if (opened) return;
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => NotionPageBrowserScreen(
-          pageId: hit.pageId,
-          title: hit.title,
+          pageId: pageId,
+          title: title,
         ),
       ),
     );
+    if (mounted) {
+      _bridge.start(seedPageId: widget.bridgePageId ?? pageId);
+    }
   }
 
   @override
@@ -217,84 +239,100 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: TextField(
-              controller: _searchController,
-              autofocus: true,
-              onChanged: _onSearchChanged,
-              onSubmitted: (value) {
-                _debounce?.cancel();
-                unawaited(_search(value));
-              },
-              textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                hintText: '搜索全部笔记内容',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searching
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.arrow_forward),
-                        tooltip: '搜索',
-                        onPressed: () =>
-                            unawaited(_search(_searchController.text)),
+          Positioned(
+            left: 0,
+            top: 0,
+            child: _bridge.buildHiddenWebView(),
+          ),
+          Positioned.fill(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    onChanged: _onSearchChanged,
+                    onSubmitted: (value) {
+                      _debounce?.cancel();
+                      unawaited(_search(value));
+                    },
+                    textInputAction: TextInputAction.search,
+                    decoration: InputDecoration(
+                      hintText: '搜索全部笔记内容',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searching
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox.square(
+                                dimension: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            )
+                          : IconButton(
+                              icon: const Icon(Icons.arrow_forward),
+                              tooltip: '搜索',
+                              onPressed: () => unawaited(
+                                _search(_searchController.text),
+                              ),
+                            ),
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                if (!_bridge.isReady)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.person_search),
+                        title: const Text('Notion 网页会话'),
+                        subtitle: Text(_bridge.status),
+                        trailing: _bridge.url == null
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.link),
+                                tooltip: '查看会话地址',
+                                onPressed: () {
+                                  showDialog<void>(
+                                    context: context,
+                                    builder: (dialogContext) => AlertDialog(
+                                      title: const Text('会话地址'),
+                                      content: SelectableText(
+                                        _bridge.url ?? '未获取',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.of(dialogContext).pop(),
+                                          child: const Text('关闭'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
                       ),
-                border: const OutlineInputBorder(),
-              ),
+                    ),
+                  ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                Expanded(child: _buildResults()),
+              ],
             ),
           ),
-          if (!_bridge.isReady)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Card(
-                child: ListTile(
-                  leading: const Icon(Icons.person_search),
-                  title: const Text('Notion 网页会话'),
-                  subtitle: Text(_bridge.status),
-                  trailing: _bridge.url == null
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.link),
-                          tooltip: '查看会话地址',
-                          onPressed: () {
-                            showDialog<void>(
-                              context: context,
-                              builder: (dialogContext) => AlertDialog(
-                                title: const Text('会话地址'),
-                                content: SelectableText(
-                                  _bridge.url ?? '未获取',
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.of(dialogContext).pop(),
-                                    child: const Text('关闭'),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ),
-            ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ),
-          Expanded(child: _buildResults()),
         ],
       ),
     );
@@ -339,7 +377,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
         return Card(
           child: InkWell(
             borderRadius: BorderRadius.circular(8),
-            onTap: () => _openHit(hit),
+            onTap: () => unawaited(_openHit(hit)),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Row(
@@ -413,17 +451,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
         return Card(
           child: InkWell(
             borderRadius: BorderRadius.circular(8),
-            onTap: () {
-              unawaited(RecentPagesService.addRecentPage(page.pageId, page.title));
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => NotionPageBrowserScreen(
-                    pageId: page.pageId,
-                    title: page.title,
-                  ),
-                ),
-              );
-            },
+            onTap: () => unawaited(_openRecentPage(page)),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Row(
