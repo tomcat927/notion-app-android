@@ -913,7 +913,7 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('调试日志'),
+        title: const Text('调试 / 崩溃日志'),
         content: SizedBox(
           width: double.maxFinite,
           height: 400,
@@ -1616,7 +1616,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Card(
           child: SwitchListTile(
             title: const Text('调试日志'),
-            subtitle: const Text('开启后将 API 请求和错误写入设备日志文件'),
+            subtitle: const Text('开启后写入 API 请求和普通调试信息；崩溃日志始终保留'),
             value: AppLogger.isEnabled,
             onChanged: (value) async {
               await AppLogger.setEnabled(value);
@@ -1628,7 +1628,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Card(
           child: ListTile(
             leading: const Icon(Icons.article),
-            title: const Text('查看调试日志'),
+            title: const Text('查看调试 / 崩溃日志'),
             trailing: const Icon(Icons.chevron_right),
             onTap: _showDebugLogs,
           ),

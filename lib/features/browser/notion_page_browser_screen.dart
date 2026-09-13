@@ -57,7 +57,14 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   @override
   void initState() {
     super.initState();
-      _controller = WebViewController()
+    unawaited(
+      AppLogger.logBreadcrumb(
+        'BrowserOpen',
+        'pageId=${widget.pageId} title=${widget.title} '
+            'url=${NotionPageBrowserScreen.pageUrl(widget.pageId)}',
+      ),
+    );
+    _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(NotionPageBrowserScreen._mobileUserAgent)
       ..enableZoom(true)

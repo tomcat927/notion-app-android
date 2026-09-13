@@ -1,5 +1,7 @@
 package com.notion.app
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -7,6 +9,7 @@ import android.net.ConnectivityManager
 import android.net.ProxyInfo
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.provider.Settings
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
@@ -16,9 +19,21 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.system.exitProcess
 
 class MainActivity : FlutterActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        installCrashHandler()
+        super.onCreate(savedInstanceState)
+        writeHistoricalProcessExits()
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -46,7 +61,133 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.notion.app/crash_logs")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "readNativeCrashLog" -> result.success(readNativeCrashLog())
+                    "clearNativeCrashLog" -> {
+                        clearNativeCrashLog()
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         applyWebViewProxy()
+    }
+
+    private fun installCrashHandler() {
+        if (crashHandlerInstalled) return
+        crashHandlerInstalled = true
+
+        val appContext = applicationContext
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            writeNativeCrashLog(
+                appContext,
+                buildString {
+                    appendLine("source=uncaughtException")
+                    appendLine("thread=${thread.name}")
+                    appendLine("exception=${throwable.javaClass.name}: ${throwable.message ?: ""}")
+                    appendLine(stackTraceToString(throwable))
+                },
+            )
+            if (previousHandler != null) {
+                previousHandler.uncaughtException(thread, throwable)
+            } else {
+                exitProcess(10)
+            }
+        }
+    }
+
+    private fun writeHistoricalProcessExits() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+
+        try {
+            val activityManager = getSystemService(ActivityManager::class.java) ?: return
+            val prefs = getSharedPreferences("native_crash_log_state", Context.MODE_PRIVATE)
+            val lastTimestamp = prefs.getLong("last_exit_timestamp", 0L)
+            var newestTimestamp = lastTimestamp
+
+            activityManager.getHistoricalProcessExitReasons(packageName, 0, 10)
+                .sortedBy { it.timestamp }
+                .forEach { info ->
+                    if (info.timestamp <= lastTimestamp) return@forEach
+                    if (!shouldLogExitReason(info.reason)) return@forEach
+                    newestTimestamp = maxOf(newestTimestamp, info.timestamp)
+
+                    val trace = readExitTrace(info)
+                    writeNativeCrashLog(
+                        applicationContext,
+                        buildString {
+                            appendLine("source=historicalProcessExit")
+                            appendLine("reason=${exitReasonLabel(info.reason)}")
+                            appendLine("status=${info.status}")
+                            appendLine("importance=${info.importance}")
+                            appendLine("processName=${info.processName ?: ""}")
+                            appendLine("description=${info.description ?: ""}")
+                            if (trace.isNotBlank()) {
+                                appendLine("--- trace ---")
+                                appendLine(trace)
+                            }
+                        },
+                    )
+                }
+
+            if (newestTimestamp > lastTimestamp) {
+                prefs.edit().putLong("last_exit_timestamp", newestTimestamp).apply()
+            }
+        } catch (ignored: Exception) {
+            // Historical process-exit logging is best-effort only.
+        }
+    }
+
+    private fun shouldLogExitReason(reason: Int): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        return reason == ApplicationExitInfo.REASON_CRASH ||
+            reason == ApplicationExitInfo.REASON_CRASH_NATIVE ||
+            reason == ApplicationExitInfo.REASON_ANR ||
+            reason == ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE
+    }
+
+    private fun exitReasonLabel(reason: Int): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return reason.toString()
+        return when (reason) {
+            ApplicationExitInfo.REASON_CRASH -> "CRASH"
+            ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
+            ApplicationExitInfo.REASON_ANR -> "ANR"
+            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "EXCESSIVE_RESOURCE_USAGE"
+            else -> reason.toString()
+        }
+    }
+
+    private fun readExitTrace(info: ApplicationExitInfo): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return ""
+        return try {
+            info.traceInputStream?.bufferedReader()?.use { reader ->
+                reader.readText().take(MAX_TRACE_CHARS)
+            } ?: ""
+        } catch (ignored: Exception) {
+            ""
+        }
+    }
+
+    private fun readNativeCrashLog(): String {
+        val file = nativeCrashLogFile(applicationContext)
+        return try {
+            if (file.isFile) file.readText() else ""
+        } catch (ignored: Exception) {
+            ""
+        }
+    }
+
+    private fun clearNativeCrashLog() {
+        try {
+            val file = nativeCrashLogFile(applicationContext)
+            if (file.exists()) file.delete()
+        } catch (ignored: Exception) {
+            // Best-effort cleanup.
+        }
     }
 
     private fun getSystemProxy(): Map<String, String?> {
@@ -148,4 +289,37 @@ class MainActivity : FlutterActivity() {
             result.error("install_failed", error.message ?: "无法启动安装器", null)
         }
     }
+
+    companion object {
+        private const val MAX_NATIVE_CRASH_LOG_BYTES = 256 * 1024
+        private const val MAX_TRACE_CHARS = 40_000
+        @Volatile
+        private var crashHandlerInstalled = false
+
+        private fun nativeCrashLogFile(context: Context): File =
+            File(context.filesDir, "notion_app_native_crash.log")
+
+        private fun writeNativeCrashLog(context: Context, message: String) {
+            try {
+                val file = nativeCrashLogFile(context)
+                if (file.length() > MAX_NATIVE_CRASH_LOG_BYTES) {
+                    file.writeText("")
+                }
+                val timestamp = SimpleDateFormat(
+                    "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+                    Locale.US,
+                ).format(Date())
+                file.appendText("[$timestamp] [NativeCrash]\n$message\n\n")
+            } catch (ignored: Exception) {
+                // Never throw from crash logging.
+            }
+        }
+
+        private fun stackTraceToString(throwable: Throwable): String {
+            val writer = StringWriter()
+            throwable.printStackTrace(PrintWriter(writer))
+            return writer.toString()
+        }
+    }
+
 }

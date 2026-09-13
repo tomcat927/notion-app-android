@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,16 +13,41 @@ import 'package:notion_app/core/network_proxy.dart';
 
 import 'package:notion_app/core/app_logger.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await NetworkProxy.initialize();
-  await SharedPreferences.getInstance();
-  await AppLogger.init();
+Future<void> main() async {
+  await runZonedGuarded<Future<void>>(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
 
-  final token = await NotionAuth.getToken();
-  final hasToken = token != null && token.isNotEmpty;
+      FlutterError.onError = (details) {
+        FlutterError.presentError(details);
+        unawaited(
+          AppLogger.logCrash(
+            'FlutterError',
+            details.exceptionAsString(),
+            details.stack,
+          ),
+        );
+      };
+      PlatformDispatcher.instance.onError = (error, stackTrace) {
+        unawaited(
+          AppLogger.logCrash('PlatformDispatcher', error, stackTrace),
+        );
+        return true;
+      };
 
-  runApp(NotionApp(isLoggedIn: hasToken));
+      await NetworkProxy.initialize();
+      await SharedPreferences.getInstance();
+      await AppLogger.init();
+
+      final token = await NotionAuth.getToken();
+      final hasToken = token != null && token.isNotEmpty;
+
+      runApp(NotionApp(isLoggedIn: hasToken));
+    },
+    (error, stackTrace) {
+      unawaited(AppLogger.logCrash('runZonedGuarded', error, stackTrace));
+    },
+  );
 }
 
 class NotionApp extends StatelessWidget {
