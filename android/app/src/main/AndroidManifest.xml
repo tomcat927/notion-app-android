@@ -28,6 +28,7 @@
             android:exported="true"
             android:hardwareAccelerated="true"
             android:launchMode="singleTop"
+            android:taskAffinity="${applicationId}.main"
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize">
 
@@ -35,7 +36,7 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme"/>
 
-            <intent-filter>
+            <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
@@ -43,11 +44,13 @@
 
         <activity
             android:name=".LogViewerActivity"
+            android:excludeFromRecents="true"
             android:exported="true"
             android:label="@string/log_viewer_label"
             android:process=":logviewer"
+            android:taskAffinity="${applicationId}.logs"
             android:theme="@style/LogViewerTheme">
-            <intent-filter>
+            <intent-filter android:priority="-1000">
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>

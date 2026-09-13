@@ -9,7 +9,7 @@ Android 普通应用不能静默安装另一个 APK；真正拆成两个 package
 效果上，桌面会出现两个图标：
 
 - `Notion App`：正常使用入口。
-- `Notion Logs`：独立原生活动，运行在 `:logviewer` 进程，用于查看、复制、分享、清空日志。
+- `Notion Logs`：独立原生活动，运行在 `:logviewer` 进程和独立任务栈，用于查看、复制、分享、清空日志。
 
 ## 能看到什么
 
@@ -34,3 +34,7 @@ Android 普通应用不能静默安装另一个 APK；真正拆成两个 package
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\collect_android_crash_logs.ps1 -Clear -Follow
 ```
+
+## 启动入口隔离
+
+`Notion App` 和 `Notion Logs` 使用不同的 `taskAffinity`，避免 Android 启动器把最近打开的日志任务误当成主 App 任务恢复。日志入口也设置为不进入最近任务列表，减少和主界面的任务栈混淆。
