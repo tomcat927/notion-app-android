@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/native_browser.dart';
+import '../../core/notion_client.dart';
 import '../browser/notion_page_browser_screen.dart';
 import 'private_search_bridge.dart';
 import 'private_search_models.dart';
@@ -23,6 +25,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   final TextEditingController _searchController = TextEditingController();
   Timer? _debounce;
   int _searchToken = 0;
+  int _bridgeStartToken = 0;
   bool _searching = false;
   bool _showCachedRecentPages = false;
   bool _recentServerLoadFinished = false;
@@ -34,7 +37,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   void initState() {
     super.initState();
     _bridge.addListener(_onBridgeChanged);
-    _bridge.start(seedPageId: widget.bridgePageId);
+    unawaited(_startBridge());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (_bridge.isReady && _searchController.text.trim().isEmpty) {
@@ -45,6 +48,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
 
   @override
   void dispose() {
+    _bridgeStartToken++;
     _debounce?.cancel();
     _searchController.dispose();
     _bridge.removeListener(_onBridgeChanged);
@@ -185,17 +189,87 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     }
   }
 
+  Future<String?> _resolveBridgeSeedPageId() async {
+    final explicitSeed = widget.bridgePageId?.trim();
+    if (explicitSeed != null && explicitSeed.isNotEmpty) {
+      return explicitSeed;
+    }
+
+    final recentPages = await RecentPagesService.getRecentPages();
+    String? recentSeed;
+    for (final page in recentPages) {
+      final pageId = page.pageId.trim();
+      if (pageId.isNotEmpty) {
+        recentSeed = pageId;
+        break;
+      }
+    }
+
+    if (recentSeed != null) {
+      unawaited(
+        AppLogger.log(
+          'PrivateSearch',
+          'bridge seed fallback from recent=$recentSeed',
+        ),
+      );
+      return recentSeed;
+    }
+
+    final apiSeed = await _loadSeedPageIdFromApi();
+    unawaited(
+      AppLogger.log(
+        'PrivateSearch',
+        'bridge seed fallback from api=${apiSeed ?? ''}',
+      ),
+    );
+    return apiSeed;
+  }
+
+  Future<String?> _loadSeedPageIdFromApi() async {
+    try {
+      final response = await NotionClient.post('/search', body: {
+        'filter': {'property': 'object', 'value': 'page'},
+        'sort': {
+          'direction': 'descending',
+          'timestamp': 'last_edited_time',
+        },
+        'page_size': 1,
+      });
+      NotionClient.ensureSuccess(response, operation: '获取搜索会话种子页面');
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final results = data['results'] as List? ?? const [];
+      if (results.isEmpty) return null;
+      final first = results.first;
+      if (first is! Map) return null;
+      final pageId = first['id']?.toString().trim();
+      return pageId == null || pageId.isEmpty ? null : pageId;
+    } catch (error) {
+      unawaited(
+        AppLogger.log(
+          'PrivateSearch',
+          'bridge seed api fallback failed: $error',
+        ),
+      );
+      return null;
+    }
+  }
+
+  Future<void> _startBridge({bool reset = false}) async {
+    final token = ++_bridgeStartToken;
+    if (reset) _bridge.reset();
+    if (!mounted || token != _bridgeStartToken) return;
+    final seedPageId = await _resolveBridgeSeedPageId();
+    if (!mounted || token != _bridgeStartToken) return;
+    _bridge.start(seedPageId: seedPageId);
+  }
+
   void _reloadBridge() {
     setState(() {
       _hits = [];
       _showCachedRecentPages = false;
       _recentServerLoadFinished = false;
     });
-    if (_bridge.hasController) {
-      _bridge.reload();
-    } else {
-      _bridge.start(seedPageId: widget.bridgePageId);
-    }
+    unawaited(_startBridge(reset: true));
   }
 
   Future<void> _openHit(PrivateSearchHit hit) async {

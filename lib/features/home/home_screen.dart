@@ -803,6 +803,14 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  String? _privateSearchSeedPageId() {
+    for (final page in _pages) {
+      final pageId = page['id']?.toString().trim();
+      if (pageId != null && pageId.isNotEmpty) return pageId;
+    }
+    return null;
+  }
+
   void _closeSearch() {
     setState(() => _searchActive = false);
     _searchFocus.unfocus();
@@ -1061,9 +1069,18 @@ class _HomeScreenState extends State<HomeScreen> {
                         icon: const Icon(Icons.travel_explore),
                         tooltip: '全文搜索',
                         onPressed: () {
+                          final seedPageId = _privateSearchSeedPageId();
+                          unawaited(
+                            AppLogger.log(
+                              'Home',
+                              '打开全文搜索 seedPageId=${seedPageId ?? ''}',
+                            ),
+                          );
                           Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => const PrivateSearchScreen(),
+                              builder: (_) => PrivateSearchScreen(
+                                bridgePageId: seedPageId,
+                              ),
                             ),
                           );
                         },

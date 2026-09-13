@@ -35,14 +35,22 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
   void start({String? seedPageId}) {
     if (_started) return;
 
+    final seedId = seedPageId?.trim().replaceAll('-', '') ?? '';
+    if (seedId.isEmpty) {
+      _ready = false;
+      _probeRetryCount = 0;
+      _status = '缺少可用于连接的 Notion 页面，请刷新或先打开任意笔记';
+      _url = null;
+      notifyListeners();
+      unawaited(AppLogger.log('PrivateSearch', 'bridge start skipped: empty seed'));
+      return;
+    }
+
     _started = true;
     _ready = false;
     _probeRetryCount = 0;
     _status = '正在连接 Notion';
-    final seedId = seedPageId?.trim().replaceAll('-', '') ?? '';
-    final initialUrl = seedId.isEmpty
-        ? 'https://www.notion.so/'
-        : 'https://www.notion.so/$seedId';
+    final initialUrl = 'https://www.notion.so/$seedId';
     unawaited(AppLogger.log('PrivateSearch', 'bridge start: $initialUrl'));
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
