@@ -188,12 +188,15 @@ class BrowserActivity : Activity() {
 
     private fun createWebViewClient(): WebViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            return shouldOpenExternally(request.url)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !request.isForMainFrame) {
+                return false
+            }
+            return shouldOverrideNavigation(request.url)
         }
 
         @Deprecated("Deprecated in Java")
         override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-            return shouldOpenExternally(Uri.parse(url))
+            return shouldOverrideNavigation(Uri.parse(url))
         }
 
         override fun onPageFinished(view: WebView, url: String) {
@@ -251,14 +254,46 @@ class BrowserActivity : Activity() {
         }
     }
 
-    private fun shouldOpenExternally(uri: Uri): Boolean {
-        val scheme = uri.scheme?.lowercase(Locale.US) ?: return false
-        if (scheme == "http" || scheme == "https") return false
+    private fun shouldOverrideNavigation(uri: Uri): Boolean {
+        if (isNotionUri(uri)) return false
+        if (!isExternalUri(uri)) return true
+        writeBrowserLog("open external link: $uri")
+        openExternally(uri)
+        return true
+    }
 
+    private fun isNotionUri(uri: Uri): Boolean {
+        val host = uri.host?.lowercase(Locale.US) ?: return false
+        return matchesDomain(host, "notion.so") ||
+            matchesDomain(host, "notion.com") ||
+            matchesDomain(host, "notion.co") ||
+            matchesDomain(host, "notion.site") ||
+            matchesDomain(host, "notionusercontent.com")
+    }
+
+    private fun matchesDomain(host: String, domain: String): Boolean {
+        return host == domain || host.endsWith(".$domain")
+    }
+
+    private fun isExternalUri(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase(Locale.US) ?: return false
+        return scheme == "http" ||
+            scheme == "https" ||
+            scheme == "mailto" ||
+            scheme == "tel" ||
+            scheme == "sms"
+    }
+
+    private fun openExternally(uri: Uri): Boolean {
         return try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            startActivity(
+                Intent(Intent.ACTION_VIEW, uri).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                },
+            )
             true
         } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "无法打开链接：$uri", Toast.LENGTH_SHORT).show()
             false
         }
     }
