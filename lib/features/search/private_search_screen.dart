@@ -212,7 +212,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     _bridge.reset();
     if (!mounted) return;
     final opened = await NativeBrowser.openPage(pageId: pageId, title: title);
-    if (opened) return;
+    if (opened || !mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => NotionPageBrowserScreen(
