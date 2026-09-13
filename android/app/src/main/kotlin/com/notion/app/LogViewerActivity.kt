@@ -84,7 +84,7 @@ class LogViewerActivity : Activity() {
             setBackgroundColor(0xFFFFFFFF.toInt())
             addView(
                 logTextView,
-                ScrollView.LayoutParams(
+                ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ),
