@@ -34,9 +34,12 @@ class BrowserActivity : Activity() {
     private lateinit var content: LinearLayout
     private var webView: WebView? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var openExternalLinksInApp: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        openExternalLinksInApp =
+            intent.getBooleanExtra(EXTRA_OPEN_EXTERNAL_LINKS_IN_APP, false)
         title = intent.getStringExtra(EXTRA_TITLE).takeUnless { it.isNullOrBlank() } ?: "Notion"
         setContentView(createContentView())
         createWebView()
@@ -256,6 +259,10 @@ class BrowserActivity : Activity() {
 
     private fun shouldOverrideNavigation(uri: Uri): Boolean {
         if (isNotionUri(uri)) return false
+        if (openExternalLinksInApp && isWebUri(uri)) {
+            writeBrowserLog("open external web link in app: $uri")
+            return false
+        }
         if (!isExternalUri(uri)) return true
         writeBrowserLog("open external link: $uri")
         openExternally(uri)
@@ -277,11 +284,15 @@ class BrowserActivity : Activity() {
 
     private fun isExternalUri(uri: Uri): Boolean {
         val scheme = uri.scheme?.lowercase(Locale.US) ?: return false
-        return scheme == "http" ||
-            scheme == "https" ||
+        return isWebUri(uri) ||
             scheme == "mailto" ||
             scheme == "tel" ||
             scheme == "sms"
+    }
+
+    private fun isWebUri(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase(Locale.US) ?: return false
+        return scheme == "http" || scheme == "https"
     }
 
     private fun openExternally(uri: Uri): Boolean {
@@ -305,7 +316,11 @@ class BrowserActivity : Activity() {
             return
         }
         val url = "https://www.notion.so/$pageId"
-        writeBrowserLog("open page: $pageId url=$url title=${intent.getStringExtra(EXTRA_TITLE).orEmpty()}")
+        writeBrowserLog(
+            "open page: $pageId url=$url " +
+                "openExternalLinksInApp=$openExternalLinksInApp " +
+                "title=${intent.getStringExtra(EXTRA_TITLE).orEmpty()}",
+        )
         webView?.loadUrl(url)
     }
 
@@ -381,6 +396,7 @@ class BrowserActivity : Activity() {
     companion object {
         const val EXTRA_PAGE_ID = "pageId"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_OPEN_EXTERNAL_LINKS_IN_APP = "openExternalLinksInApp"
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
         private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +

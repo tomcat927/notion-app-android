@@ -102,6 +102,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<dynamic>? _pageBlocks;
   final NotionPrivateSearchBridge _privateSearchBridge =
       NotionPrivateSearchBridge.instance;
+  bool _openExternalLinksInApp = false;
 
   @override
   void dispose() {
@@ -119,6 +120,25 @@ class _HomeScreenState extends State<HomeScreen> {
     _scrollController.addListener(_onScroll);
     unawaited(_initialize());
     unawaited(_autoCheckForUpdates());
+    unawaited(_loadBrowserPreferences());
+  }
+
+  Future<void> _loadBrowserPreferences() async {
+    final openExternalLinksInApp = await NativeBrowser.openExternalLinksInApp();
+    if (!mounted) return;
+    setState(() => _openExternalLinksInApp = openExternalLinksInApp);
+  }
+
+  Future<void> _setOpenExternalLinksInApp(bool value) async {
+    await NativeBrowser.setOpenExternalLinksInApp(value);
+    if (!mounted) return;
+    setState(() => _openExternalLinksInApp = value);
+    unawaited(
+      AppLogger.log(
+        'Settings',
+        '外部网页在 App 内打开: ${value ? 'on' : 'off'}',
+      ),
+    );
   }
 
   Future<void> _initialize() async {
@@ -1602,14 +1622,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSettings() {
-      return ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const AboutSection(),
-          const SizedBox(height: 8),
-          const UpdateSection(),
-          const SizedBox(height: 8),
-          Card(
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const AboutSection(),
+        const SizedBox(height: 8),
+        const UpdateSection(),
+        const SizedBox(height: 8),
+        Card(
+          child: SwitchListTile(
+            secondary: const Icon(Icons.open_in_browser),
+            title: const Text('外部网页在 App 内打开'),
+            subtitle: const Text('关闭时使用系统默认浏览器；Notion 页面始终在 App 内打开'),
+            value: _openExternalLinksInApp,
+            onChanged: (value) =>
+                unawaited(_setOpenExternalLinksInApp(value)),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
           child: SwitchListTile(
             title: const Text('调试日志'),
             subtitle: const Text('开启后写入 API 请求和普通调试信息；崩溃日志始终保留'),

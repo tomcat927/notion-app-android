@@ -67,6 +67,7 @@ class MainActivity : FlutterActivity() {
                     "openPage" -> openPageBrowser(
                         call.argument<String>("pageId"),
                         call.argument<String>("title"),
+                        call.argument<Boolean>("openExternalLinksInApp"),
                         result,
                     )
                     else -> result.notImplemented()
@@ -236,7 +237,12 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun openPageBrowser(pageId: String?, title: String?, result: MethodChannel.Result) {
+    private fun openPageBrowser(
+        pageId: String?,
+        title: String?,
+        openExternalLinksInApp: Boolean?,
+        result: MethodChannel.Result,
+    ) {
         if (pageId.isNullOrBlank()) {
             result.error("invalid_argument", "缺少页面 ID", null)
             return
@@ -246,6 +252,10 @@ class MainActivity : FlutterActivity() {
             val intent = Intent(this, BrowserActivity::class.java).apply {
                 putExtra(BrowserActivity.EXTRA_PAGE_ID, pageId)
                 putExtra(BrowserActivity.EXTRA_TITLE, title.orEmpty())
+                putExtra(
+                    BrowserActivity.EXTRA_OPEN_EXTERNAL_LINKS_IN_APP,
+                    openExternalLinksInApp == true,
+                )
             }
             startActivity(intent)
             result.success(true)

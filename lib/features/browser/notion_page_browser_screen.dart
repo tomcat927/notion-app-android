@@ -13,6 +13,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/native_browser.dart';
 
 class NotionPageBrowserScreen extends StatefulWidget {
   const NotionPageBrowserScreen({
@@ -53,6 +54,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   bool _hasError = false;
   String _errorDescription = '';
   Completer<String>? _privateSearchCompleter;
+  bool _openExternalLinksInApp = false;
 
   @override
   void initState() {
@@ -64,6 +66,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
             'url=${NotionPageBrowserScreen.pageUrl(widget.pageId)}',
       ),
     );
+    unawaited(_loadBrowserPreferences());
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(NotionPageBrowserScreen._mobileUserAgent)
@@ -113,6 +116,12 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       (_controller.platform as AndroidWebViewController)
           .setOnShowFileSelector(_onShowFileSelector);
     }
+  }
+
+  Future<void> _loadBrowserPreferences() async {
+    final openExternalLinksInApp = await NativeBrowser.openExternalLinksInApp();
+    if (!mounted) return;
+    setState(() => _openExternalLinksInApp = openExternalLinksInApp);
   }
 
   Future<List<String>> _onShowFileSelector(FileSelectorParams params) async {
@@ -447,6 +456,11 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       return NavigationDecision.navigate;
     }
 
+    if (_openExternalLinksInApp && _isWebUri(uri)) {
+      unawaited(AppLogger.log('Browser', 'App 内打开外部网页: $uri'));
+      return NavigationDecision.navigate;
+    }
+
     if (_isExternalUri(uri)) {
       unawaited(_launchExternal(uri));
     }
@@ -458,6 +472,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     final host = uri.host.toLowerCase();
     return _matchesDomain(host, 'notion.so') ||
         _matchesDomain(host, 'notion.com') ||
+        _matchesDomain(host, 'notion.co') ||
         _matchesDomain(host, 'notion.site') ||
         _matchesDomain(host, 'notionusercontent.com');
   }
@@ -468,6 +483,11 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
 
   bool _isExternalUri(Uri uri) {
     const schemes = {'http', 'https', 'mailto', 'tel', 'sms'};
+    return schemes.contains(uri.scheme.toLowerCase());
+  }
+
+  bool _isWebUri(Uri uri) {
+    const schemes = {'http', 'https'};
     return schemes.contains(uri.scheme.toLowerCase());
   }
 
