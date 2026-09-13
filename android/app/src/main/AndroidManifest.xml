@@ -43,20 +43,6 @@
         </activity>
 
         <activity
-            android:name=".LogViewerActivity"
-            android:excludeFromRecents="true"
-            android:exported="true"
-            android:label="@string/log_viewer_label"
-            android:process=":logviewer"
-            android:taskAffinity="${applicationId}.logs"
-            android:theme="@style/LogViewerTheme">
-            <intent-filter android:priority="-1000">
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
-        </activity>
-
-        <activity
             android:name=".BrowserActivity"
             android:exported="false"
             android:hardwareAccelerated="true"
