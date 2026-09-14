@@ -1,6 +1,9 @@
 package com.notion.app
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ClipboardManager
+import android.content.ClipData
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Typeface
@@ -13,6 +16,7 @@ import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -35,6 +39,7 @@ class BrowserActivity : Activity() {
     private var webView: WebView? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var openExternalLinksInApp: Boolean = false
+    private var elementInspectorActive: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,6 +54,7 @@ class BrowserActivity : Activity() {
     override fun onDestroy() {
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
+        elementInspectorActive = false
         destroyWebView()
         super.onDestroy()
     }
@@ -97,6 +103,19 @@ class BrowserActivity : Activity() {
                 textSize = 13f
                 isAllCaps = false
                 setOnClickListener { onBackPressed() }
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+
+        toolbar.addView(
+            Button(this).apply {
+                text = "控件"
+                textSize = 13f
+                isAllCaps = false
+                setOnClickListener { toggleElementInspector() }
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -181,6 +200,7 @@ class BrowserActivity : Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             userAgentString = MOBILE_USER_AGENT
         }
+        view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
         CookieManager.getInstance().setAcceptCookie(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
@@ -204,6 +224,9 @@ class BrowserActivity : Activity() {
 
         override fun onPageFinished(view: WebView, url: String) {
             titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
+            if (elementInspectorActive) {
+                installElementInspector()
+            }
         }
 
         override fun onReceivedError(
@@ -309,6 +332,69 @@ class BrowserActivity : Activity() {
         }
     }
 
+    private fun toggleElementInspector() {
+        if (webView == null) return
+        if (elementInspectorActive) {
+            stopElementInspector()
+            Toast.makeText(this, "已关闭控件诊断", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        elementInspectorActive = true
+        installElementInspector()
+        Toast.makeText(this, "请点击要查看的网页控件", Toast.LENGTH_LONG).show()
+    }
+
+    private fun stopElementInspector() {
+        elementInspectorActive = false
+        webView?.evaluateJavascript(
+            "window.__notionElementInspectorCleanup && " +
+                "window.__notionElementInspectorCleanup();",
+            null,
+        )
+    }
+
+    private fun installElementInspector() {
+        webView?.evaluateJavascript(
+            ELEMENT_INSPECTOR_SCRIPT,
+            null,
+        )
+    }
+
+    private fun showInspectedElement(payload: String) {
+        elementInspectorActive = false
+        val textView = TextView(this).apply {
+            text = payload
+            textSize = 11f
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            setTextIsSelectable(true)
+        }
+        val scrollView = android.widget.ScrollView(this).apply {
+            addView(textView)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("网页控件信息")
+            .setView(scrollView)
+            .setNegativeButton("关闭", null)
+            .setNeutralButton("复制全部") { _, _ ->
+                val clipboard = getSystemService(ClipboardManager::class.java)
+                clipboard?.setPrimaryClip(ClipData.newPlainText("网页控件信息", payload))
+                Toast.makeText(this, "控件信息已复制", Toast.LENGTH_SHORT).show()
+            }
+            .create()
+        dialog.show()
+    }
+
+    private inner class ElementInspectorBridge {
+        @JavascriptInterface
+        fun postMessage(payload: String) {
+            runOnUiThread {
+                stopElementInspector()
+                showInspectedElement(payload)
+            }
+        }
+    }
+
     private fun loadInitialPage() {
         val pageId = intent.getStringExtra(EXTRA_PAGE_ID).orEmpty().trim().replace("-", "")
         if (pageId.isEmpty()) {
@@ -401,5 +487,95 @@ class BrowserActivity : Activity() {
         private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/141.0.0.0 Mobile Safari/537.36"
+
+        private const val ELEMENT_INSPECTOR_SCRIPT = """
+(() => {
+  if (window.__notionElementInspectorCleanup) {
+    window.__notionElementInspectorCleanup();
+  }
+
+  const isElement = value => value && value.nodeType === 1;
+  const describe = (element, includeHtml = true) => {
+    if (!isElement(element)) return null;
+    const attributes = {};
+    for (const attribute of Array.from(element.attributes || [])) {
+      attributes[attribute.name] = attribute.value;
+    }
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return {
+      tag: element.tagName.toLowerCase(),
+      id: element.id || '',
+      className: typeof element.className === 'string'
+        ? element.className
+        : String(element.className || ''),
+      role: element.getAttribute('role') || '',
+      ariaLabel: element.getAttribute('aria-label') || '',
+      title: element.getAttribute('title') || '',
+      text: (element.innerText || element.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .substring(0, 1000),
+      attributes,
+      position: style.position,
+      display: style.display,
+      rect: {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      },
+      outerHTML: includeHtml
+        ? (element.outerHTML || '').substring(0, 12000)
+        : ''
+    };
+  };
+  const findInteractive = element => {
+    let current = isElement(element) ? element : null;
+    for (let depth = 0; current && depth < 10; depth++) {
+      if (current.matches(
+        'button, a, [role="button"], [aria-label], [data-testid], [title]'
+      )) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return isElement(element) ? element : document.body;
+  };
+  const ancestorDescriptions = element => {
+    const result = [];
+    let current = element;
+    for (let depth = 0; current && depth < 8; depth++) {
+      result.push(describe(current, false));
+      current = current.parentElement;
+    }
+    return result;
+  };
+  const handler = event => {
+    const eventTarget = isElement(event.target)
+      ? event.target
+      : event.target?.parentElement;
+    const interactiveTarget = findInteractive(eventTarget);
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    const payload = {
+      eventTarget: describe(eventTarget),
+      interactiveTarget: describe(interactiveTarget),
+      ancestors: ancestorDescriptions(interactiveTarget),
+      url: window.location.href
+    };
+    if (window.NotionElementInspector) {
+      window.NotionElementInspector.postMessage(JSON.stringify(payload, null, 2));
+    }
+    window.__notionElementInspectorCleanup();
+  };
+  window.__notionElementInspectorCleanup = () => {
+    document.removeEventListener('click', handler, true);
+    window.__notionElementInspectorCleanup = null;
+  };
+  document.addEventListener('click', handler, true);
+})();
+"""
     }
 }

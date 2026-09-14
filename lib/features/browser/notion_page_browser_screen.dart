@@ -55,6 +55,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   String _errorDescription = '';
   Completer<String>? _privateSearchCompleter;
   bool _openExternalLinksInApp = false;
+  bool _elementInspectorActive = false;
 
   @override
   void initState() {
@@ -79,6 +80,12 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
           if (completer != null && !completer.isCompleted) {
             completer.complete(message.message);
           }
+        },
+      )
+      ..addJavaScriptChannel(
+        'NotionElementInspector',
+        onMessageReceived: (message) {
+          unawaited(_showInspectedElement(message.message));
         },
       )
       ..setOnConsoleMessage((message) {
@@ -477,6 +484,155 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         _matchesDomain(host, 'notionusercontent.com');
   }
 
+  Future<void> _startElementInspector() async {
+    try {
+      await _controller.runJavaScript('''
+(() => {
+  if (window.__notionElementInspectorCleanup) {
+    window.__notionElementInspectorCleanup();
+  }
+
+  const isElement = value => value && value.nodeType === 1;
+  const describe = element => {
+    if (!isElement(element)) return null;
+    const attributes = {};
+    for (const attribute of Array.from(element.attributes || [])) {
+      attributes[attribute.name] = attribute.value;
+    }
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return {
+      tag: element.tagName.toLowerCase(),
+      id: element.id || '',
+      className: typeof element.className === 'string'
+        ? element.className
+        : String(element.className || ''),
+      role: element.getAttribute('role') || '',
+      ariaLabel: element.getAttribute('aria-label') || '',
+      title: element.getAttribute('title') || '',
+      text: (element.innerText || element.textContent || '')
+        .replace(/\\s+/g, ' ')
+        .trim()
+        .substring(0, 1000),
+      attributes,
+      position: style.position,
+      display: style.display,
+      rect: {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      },
+      outerHTML: (element.outerHTML || '').substring(0, 16000)
+    };
+  };
+  const findInteractive = element => {
+    let current = isElement(element) ? element : null;
+    for (let depth = 0; current && depth < 10; depth++) {
+      if (current.matches(
+        'button, a, [role="button"], [aria-label], [data-testid], [title]'
+      )) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return isElement(element) ? element : document.body;
+  };
+  const ancestorDescriptions = element => {
+    const result = [];
+    let current = element;
+    for (let depth = 0; current && depth < 8; depth++) {
+      result.push(describe(current));
+      current = current.parentElement;
+    }
+    return result;
+  };
+  const handler = event => {
+    const eventTarget = isElement(event.target)
+      ? event.target
+      : event.target?.parentElement;
+    const interactiveTarget = findInteractive(eventTarget);
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    const payload = {
+      eventTarget: describe(eventTarget),
+      interactiveTarget: describe(interactiveTarget),
+      ancestors: ancestorDescriptions(interactiveTarget),
+      url: window.location.href
+    };
+    if (window.NotionElementInspector) {
+      window.NotionElementInspector.postMessage(JSON.stringify(payload));
+    }
+    window.__notionElementInspectorCleanup();
+  };
+  window.__notionElementInspectorCleanup = () => {
+    document.removeEventListener('click', handler, true);
+    window.__notionElementInspectorCleanup = null;
+  };
+  document.addEventListener('click', handler, true);
+})();
+''');
+      if (!mounted) return;
+      setState(() => _elementInspectorActive = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('诊断模式已开启，请点击要查看的网页控件'),
+          duration: Duration(seconds: 5),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('开启控件诊断失败：$error')),
+      );
+    }
+  }
+
+  Future<void> _showInspectedElement(String rawMessage) async {
+    Map<String, dynamic> payload;
+    try {
+      payload = Map<String, dynamic>.from(jsonDecode(rawMessage) as Map);
+    } catch (_) {
+      payload = {'rawMessage': rawMessage};
+    }
+    if (mounted) setState(() => _elementInspectorActive = false);
+
+    final display = const JsonEncoder.withIndent('  ').convert(payload);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('网页控件信息'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 520,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              display,
+              style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: display));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('控件信息已复制')),
+              );
+            },
+            child: const Text('复制全部'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
   bool _matchesDomain(String host, String domain) {
     return host == domain || host.endsWith('.$domain');
   }
@@ -711,6 +867,15 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
+            IconButton(
+              icon: Icon(
+                _elementInspectorActive
+                    ? Icons.touch_app
+                    : Icons.manage_search,
+              ),
+              tooltip: '网页控件诊断',
+              onPressed: _startElementInspector,
+            ),
             IconButton(
               icon: const Icon(Icons.manage_search),
               tooltip: '验证网页全文搜索',
