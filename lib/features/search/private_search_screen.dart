@@ -22,6 +22,9 @@ class PrivateSearchScreen extends StatefulWidget {
 
 class _PrivateSearchScreenState extends State<PrivateSearchScreen>
     with WidgetsBindingObserver {
+  static const String _defaultBridgeSeedPageId =
+      'ccb3f4efe1cb4cbb904056f16c451b96';
+
   final NotionPrivateSearchBridge _bridge = NotionPrivateSearchBridge.instance;
   final TextEditingController _searchController = TextEditingController();
   Timer? _debounce;
@@ -34,6 +37,11 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
   String? _error;
   List<PrivateSearchHit> _hits = [];
   List<RecentPage> _recentPages = [];
+  List<String> _bridgeSeedCandidates = [];
+  int _bridgeSeedIndex = 0;
+  String? _activeBridgeSeedPageId;
+  String? _lastCachedBridgeSeedPageId;
+  bool _bridgeSeedFallbackScheduled = false;
 
   @override
   void initState() {
@@ -84,6 +92,31 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
   void _onBridgeChanged() {
     if (!mounted) return;
     setState(() {});
+    if (_bridge.isReady) {
+      _bridgeSeedFallbackScheduled = false;
+      final seedPageId = _activeBridgeSeedPageId;
+      if (seedPageId != null && seedPageId != _lastCachedBridgeSeedPageId) {
+        _lastCachedBridgeSeedPageId = seedPageId;
+        unawaited(
+          RecentPagesService.cachePrivateSearchSeedPageId(seedPageId),
+        );
+        unawaited(
+          AppLogger.log(
+            'PrivateSearch',
+            'bridge seed cached: $seedPageId',
+          ),
+        );
+      }
+    } else if (_shouldTryNextBridgeSeed && !_bridgeSeedFallbackScheduled) {
+      final reason = _bridge.status;
+      _bridgeSeedFallbackScheduled = true;
+      unawaited(
+        Future<void>.microtask(() {
+          if (!mounted) return;
+          _tryNextBridgeSeed(reason: reason);
+        }),
+      );
+    }
     if (_bridge.isReady &&
         _searchController.text.trim().isEmpty &&
         !_recentServerLoadFinished &&
@@ -270,53 +303,52 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
     }
   }
 
-  Future<String?> _resolveBridgeSeedPageId() async {
-    final explicitSeed = widget.bridgePageId?.trim();
-    if (explicitSeed != null && explicitSeed.isNotEmpty) {
-      return explicitSeed;
-    }
+  Future<List<String>> _resolveBridgeSeedPageIds() async {
+    final seeds = <String>[];
+    final seen = <String>{};
 
-    final recentPages = await RecentPagesService.getRecentPages();
-    String? recentSeed;
-    for (final page in recentPages) {
-      final pageId = page.pageId.trim();
-      if (pageId.isNotEmpty) {
-        recentSeed = pageId;
-        break;
-      }
-    }
-
-    if (recentSeed != null) {
+    void addSeed(String? rawSeed, String source) {
+      final seed = _normalizePageId(rawSeed);
+      if (seed.isEmpty || !seen.add(seed)) return;
+      seeds.add(seed);
       unawaited(
         AppLogger.log(
           'PrivateSearch',
-          'bridge seed fallback from recent=$recentSeed',
+          'bridge seed candidate: source=$source pageId=$seed',
         ),
       );
-      return recentSeed;
+    }
+
+    addSeed(_defaultBridgeSeedPageId, 'default_database_page');
+    addSeed(
+      await RecentPagesService.getCachedPrivateSearchSeedPageId(),
+      'last_successful_cache',
+    );
+    addSeed(widget.bridgePageId, 'current_page');
+
+    final recentPages = await RecentPagesService.getRecentPages();
+    for (final page in recentPages) {
+      addSeed(page.pageId, 'local_recent');
+      if (seeds.length >= 8) break;
     }
 
     final cachedHits = await RecentPagesService.getCachedOfficialRecentHits();
     for (final hit in cachedHits) {
-      final pageId = hit.pageId.trim();
-      if (pageId.isEmpty) continue;
-      unawaited(
-        AppLogger.log(
-          'PrivateSearch',
-          'bridge seed fallback from official cache=$pageId',
-        ),
-      );
-      return pageId;
+      addSeed(hit.pageId, 'official_recent_cache');
+      if (seeds.length >= 12) break;
     }
 
-    final apiSeed = await _loadSeedPageIdFromApi();
+    if (seeds.length < 12) {
+      addSeed(await _loadSeedPageIdFromApi(), 'notion_api');
+    }
+
     unawaited(
       AppLogger.log(
         'PrivateSearch',
-        'bridge seed fallback from api=${apiSeed ?? ''}',
+        'bridge seed candidates resolved: count=${seeds.length}',
       ),
     );
-    return apiSeed;
+    return seeds;
   }
 
   Future<String?> _loadSeedPageIdFromApi() async {
@@ -348,10 +380,52 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
     }
   }
 
+  bool get _shouldTryNextBridgeSeed {
+    if (_bridge.isReady || _bridgeSeedCandidates.isEmpty) return false;
+    if (_bridgeSeedIndex + 1 >= _bridgeSeedCandidates.length) return false;
+    final status = _bridge.status;
+    return status.contains('页面未提供工作区数据') ||
+        status.startsWith('Notion 页面加载失败') ||
+        status.contains('缺少可用于连接的 Notion 页面');
+  }
+
+  void _tryNextBridgeSeed({required String reason}) {
+    _bridgeSeedFallbackScheduled = false;
+    if (!_shouldTryNextBridgeSeed) return;
+    final previousSeed = _activeBridgeSeedPageId ?? '';
+    _bridgeSeedIndex++;
+    final nextSeed = _bridgeSeedCandidates[_bridgeSeedIndex];
+    _activeBridgeSeedPageId = nextSeed;
+    unawaited(
+      AppLogger.log(
+        'PrivateSearch',
+        'bridge seed fallback: reason=$reason failed=$previousSeed next=$nextSeed',
+      ),
+    );
+    _bridge.reset();
+    _bridge.start(seedPageId: nextSeed);
+  }
+
+  String _normalizePageId(String? rawPageId) {
+    if (rawPageId == null) return '';
+    final match = RegExp(
+      r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}',
+    ).firstMatch(rawPageId);
+    final compact = (match?.group(0) ?? rawPageId)
+        .replaceAll('-', '')
+        .toLowerCase()
+        .trim();
+    return RegExp(r'^[0-9a-f]{32}$').hasMatch(compact) ? compact : '';
+  }
+
   Future<void> _startBridge({bool reset = false}) async {
     final token = ++_bridgeStartToken;
     if (reset) {
       _bridge.reset();
+      _bridgeSeedCandidates = [];
+      _bridgeSeedIndex = 0;
+      _activeBridgeSeedPageId = null;
+      _bridgeSeedFallbackScheduled = false;
     } else if (_bridge.hasController) {
       _bridge.cancelScheduledRelease();
       if (_bridge.isReady &&
@@ -363,9 +437,12 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
       return;
     }
     if (!mounted || token != _bridgeStartToken) return;
-    final seedPageId = await _resolveBridgeSeedPageId();
+    final seedPageIds = await _resolveBridgeSeedPageIds();
     if (!mounted || token != _bridgeStartToken) return;
-    _bridge.start(seedPageId: seedPageId);
+    _bridgeSeedCandidates = seedPageIds;
+    _bridgeSeedIndex = 0;
+    _activeBridgeSeedPageId = seedPageIds.isEmpty ? null : seedPageIds.first;
+    _bridge.start(seedPageId: _activeBridgeSeedPageId);
   }
 
   void _reloadBridge() {

@@ -35,6 +35,8 @@ class RecentPage {
 class RecentPagesService {
   static const String _key = 'recent_visited_pages';
   static const String _officialRecentHitsKey = 'official_recent_search_hits';
+  static const String _privateSearchSeedPageIdKey =
+      'private_search_seed_page_id';
   static const int _maxPages = 20;
   static const int _maxOfficialRecentHits = 50;
 
@@ -82,6 +84,21 @@ class RecentPagesService {
     );
   }
 
+  static Future<String?> getCachedPrivateSearchSeedPageId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final pageId = _normalizePageId(
+      prefs.getString(_privateSearchSeedPageIdKey) ?? '',
+    );
+    return pageId.isEmpty ? null : pageId;
+  }
+
+  static Future<void> cachePrivateSearchSeedPageId(String pageId) async {
+    final normalized = _normalizePageId(pageId);
+    if (normalized.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_privateSearchSeedPageIdKey, normalized);
+  }
+
   static Future<List<PrivateSearchHit>> getCachedOfficialRecentHits() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_officialRecentHitsKey);
@@ -118,5 +135,16 @@ class RecentPagesService {
       _officialRecentHitsKey,
       jsonEncode(unique.values.map((hit) => hit.toJson()).toList()),
     );
+  }
+
+  static String _normalizePageId(String rawPageId) {
+    final match = RegExp(
+      r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}',
+    ).firstMatch(rawPageId);
+    final compact = (match?.group(0) ?? rawPageId)
+        .replaceAll('-', '')
+        .toLowerCase()
+        .trim();
+    return RegExp(r'^[0-9a-f]{32}$').hasMatch(compact) ? compact : '';
   }
 }
