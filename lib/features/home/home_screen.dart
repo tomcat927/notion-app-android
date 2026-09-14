@@ -109,7 +109,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _showElementInspector = false;
   bool _cleaningCache = false;
   String? _pendingBrowserRefreshPageId;
-  final Set<String> _collapsedMonthGroups = {};
+  bool _monthGroupsAutoExpanded = true;
+  bool _loadingAll = false;
+  final Map<String, bool> _monthExpansionOverrides = {};
   final Map<String, String> _monthGroupTitles = {};
 
   @override
@@ -131,6 +133,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_initialize());
     unawaited(_autoCheckForUpdates());
     unawaited(_loadBrowserPreferences());
+    unawaited(_loadMonthGroupPreference());
   }
 
   @override
@@ -158,6 +161,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() {
       _openExternalLinksInApp = openExternalLinksInApp;
       _showElementInspector = showElementInspector;
+    });
+  }
+
+  Future<void> _loadMonthGroupPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _monthGroupsAutoExpanded =
+          prefs.getBool('month_groups_auto_expand') ?? true;
+    });
+  }
+
+  Future<void> _setMonthGroupsAutoExpanded(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('month_groups_auto_expand', value);
+    if (!mounted) return;
+    setState(() {
+      _monthGroupsAutoExpanded = value;
+      _monthExpansionOverrides.clear();
     });
   }
 
@@ -543,6 +565,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _pages = [];
         _nextCursor = null;
         _hasMore = false;
+        _loadingMore = false;
+        _loadingAll = false;
       });
     }
 
@@ -603,9 +627,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _loadAllRows() async {
+    if (_loading || _loadingAll || !_hasMore || _pages.isEmpty) return;
+
+    final generation = _loadGeneration;
+    setState(() => _loadingAll = true);
+
+    try {
+      while (mounted &&
+          generation == _loadGeneration &&
+          _hasMore &&
+          _nextCursor != null) {
+        final cursorBefore = _nextCursor;
+        await _loadMoreRows();
+        if (!mounted || generation != _loadGeneration) return;
+        if (!_hasMore || _nextCursor == null || _nextCursor == cursorBefore) {
+          return;
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loadingAll = false);
+      } else {
+        _loadingAll = false;
+      }
+    }
+  }
+
   void _onScroll() {
     if (!_scrollController.hasClients) return;
-    if (_loading || _loadingMore || !_hasMore) return;
+    if (_loading || _loadingMore || _loadingAll || !_hasMore) return;
 
     final position = _scrollController.position;
     if (position.maxScrollExtent - position.pixels < 240) {
@@ -826,7 +877,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _viewId = id;
-      _collapsedMonthGroups.clear();
+      _monthExpansionOverrides.clear();
     });
     await _loadRows();
   }
@@ -1308,6 +1359,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             SliverToBoxAdapter(child: _buildSearchScopeBar())
           else if (_views.length > 1)
             SliverToBoxAdapter(child: _buildViewBar()),
+          if (_monthGroupingEnabled)
+            SliverToBoxAdapter(child: _buildMonthGroupControls()),
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           if (_loading)
             const SliverFillRemaining(
@@ -1375,7 +1428,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Center(
-                      child: _loadingMore
+                      child: _loadingMore || _loadingAll
                           ? const SizedBox(
                               height: 24,
                               width: 24,
@@ -1404,11 +1457,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     subtitle: Text('${row.count} 条'),
                     onTap: () {
                       setState(() {
-                        if (row.expanded) {
-                          _collapsedMonthGroups.add(row.key);
-                        } else {
-                          _collapsedMonthGroups.remove(row.key);
-                        }
+                        _monthExpansionOverrides[row.key] = !row.expanded;
                       });
                     },
                   );
@@ -1428,6 +1477,40 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final view = _activeView;
     if (view == null || _searchActive) return false;
     return view.label.contains('按月');
+  }
+
+  Widget _buildMonthGroupControls() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '自动展开月份',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+          Switch(
+            value: _monthGroupsAutoExpanded,
+            onChanged: _setMonthGroupsAutoExpanded,
+          ),
+          if (_hasMore) ...[
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: _loadingAll ? null : _loadAllRows,
+              icon: _loadingAll
+                  ? const SizedBox(
+                      height: 16,
+                      width: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.done_all, size: 18),
+              label: const Text('加载全部'),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   List<Object> _buildListRows() {
@@ -1452,7 +1535,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     for (final entry in groupedPages.entries) {
       final key = entry.key;
       final pages = entry.value;
-      final expanded = !_collapsedMonthGroups.contains(key);
+      final expanded = _monthExpansionOverrides.containsKey(key)
+          ? _monthExpansionOverrides[key]!
+          : _monthGroupsAutoExpanded;
       rows.add(
         _MonthGroupHeader(
           key: key,
