@@ -113,6 +113,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _loadingAll = false;
   final Map<String, bool> _monthExpansionOverrides = {};
   final Map<String, String> _monthGroupTitles = {};
+  final Map<String, GlobalKey> _pageRowKeys = {};
+  final Map<String, GlobalKey> _monthRowKeys = {};
 
   @override
   void dispose() {
@@ -1000,6 +1002,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final refreshedPage = jsonDecode(response.body) as Map<String, dynamic>;
       if (!mounted) return;
 
+      if (_isPageDeleted(refreshedPage)) {
+        await _removeDeletedPage(
+          normalizedPageId,
+          reason: '$reason:page_response',
+        );
+        return;
+      }
+
       final latestTitle = _pageTitle(refreshedPage);
       setState(() {
         final index = _pages.indexWhere(
@@ -1024,6 +1034,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       );
     } catch (error) {
+      if (error is NotionApiException && error.statusCode == 404) {
+        await _removeDeletedPage(
+          normalizedPageId,
+          reason: '$reason:not_found',
+        );
+        return;
+      }
       unawaited(
         AppLogger.log(
           'Home',
@@ -1043,6 +1060,155 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .toLowerCase()
         .trim();
     return RegExp(r'^[0-9a-f]{32}$').hasMatch(compact) ? compact : '';
+  }
+
+  bool _isPageDeleted(Map<String, dynamic> page) {
+    bool isTrue(Object? value) =>
+        value == true || value?.toString().toLowerCase() == 'true';
+    return isTrue(page['archived']) ||
+        isTrue(page['in_trash']) ||
+        isTrue(page['in_trashed']) ||
+        isTrue(page['trashed']);
+  }
+
+  GlobalKey? _pageRowKey(String pageId) {
+    if (pageId.isEmpty) return null;
+    return _pageRowKeys.putIfAbsent(
+      pageId,
+      () => GlobalKey(debugLabel: 'home-page-row-$pageId'),
+    );
+  }
+
+  GlobalKey _monthRowKey(String monthKey) {
+    return _monthRowKeys.putIfAbsent(
+      monthKey,
+      () => GlobalKey(debugLabel: 'home-month-row-$monthKey'),
+    );
+  }
+
+  String? _normalizedPageIdForRow(Object row) {
+    final page = switch (row) {
+      _PageRow(:final page) => page,
+      _GroupedPageRow(:final page) => page,
+      _ => null,
+    };
+    if (page == null) return null;
+    return _normalizePageId(page['id']?.toString());
+  }
+
+  String? _nearbyVisibleAnchorId(
+    List<Object> rows,
+    int index, {
+    required bool forward,
+  }) {
+    final step = forward ? 1 : -1;
+    for (var i = index + step; i >= 0 && i < rows.length; i += step) {
+      final row = rows[i];
+      final String? anchor;
+      if (row is _MonthGroupHeader) {
+        anchor = 'month:${row.key}';
+      } else {
+        anchor = _normalizedPageIdForRow(row);
+      }
+      if (anchor == null || _rowTopForAnchor(anchor) == null) continue;
+      return anchor;
+    }
+    return null;
+  }
+
+  String? _scrollAnchorForDeletedPage(String pageId) {
+    final rows = _buildListRows();
+    for (var index = 0; index < rows.length; index++) {
+      if (_normalizedPageIdForRow(rows[index]) != pageId) continue;
+      return _nearbyVisibleAnchorId(rows, index, forward: true) ??
+          _nearbyVisibleAnchorId(rows, index, forward: false);
+    }
+
+    // A page hidden in a collapsed group can still make its empty group
+    // header disappear, so anchor to the next visible row in that case.
+    final pageIndex = _pages.indexWhere(
+      (page) => _normalizePageId(page['id']?.toString()) == pageId,
+    );
+    if (pageIndex < 0) return null;
+    final date = _pageGroupDate(_pages[pageIndex]);
+    final monthKey =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}';
+    final headerIndex = rows.indexWhere(
+      (row) => row is _MonthGroupHeader && row.key == monthKey,
+    );
+    if (headerIndex < 0) return null;
+    final header = rows[headerIndex];
+    if (header is! _MonthGroupHeader || header.count > 1) return null;
+    return _nearbyVisibleAnchorId(rows, headerIndex, forward: true) ??
+        _nearbyVisibleAnchorId(rows, headerIndex, forward: false);
+  }
+
+  GlobalKey? _globalKeyForAnchor(String anchor) {
+    if (anchor.startsWith('month:')) {
+      return _monthRowKeys[anchor.substring(6)];
+    }
+    return _pageRowKeys[anchor];
+  }
+
+  double? _rowTopForAnchor(String anchor) {
+    final key = _globalKeyForAnchor(anchor);
+    final context = key?.currentContext;
+    if (context == null) return null;
+    final renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox ||
+        !renderObject.attached ||
+        !renderObject.hasSize) {
+      return null;
+    }
+    return renderObject.localToGlobal(Offset.zero).dy;
+  }
+
+  void _scheduleScrollRestore({
+    required String anchor,
+    required double previousTop,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final newTop = _rowTopForAnchor(anchor);
+      if (newTop == null) return;
+
+      final delta = previousTop - newTop;
+      if (delta.abs() < 0.5) return;
+      final target = (_scrollController.offset + delta)
+          .clamp(0.0, _scrollController.position.maxScrollExtent)
+          .toDouble();
+      if (target.isFinite) _scrollController.jumpTo(target);
+    });
+  }
+
+  Future<void> _removeDeletedPage(
+    String pageId, {
+    required String reason,
+  }) async {
+    final anchor = _scrollAnchorForDeletedPage(pageId);
+    final previousTop = anchor == null ? null : _rowTopForAnchor(anchor);
+    if (mounted) {
+      setState(() {
+        _pages.removeWhere(
+          (page) => _normalizePageId(page['id']?.toString()) == pageId,
+        );
+        _pageRowKeys.remove(pageId);
+        if (_normalizePageId(_selectedPage?['id']?.toString()) == pageId) {
+          _selectedPage = null;
+        }
+      });
+      if (anchor != null && previousTop != null) {
+        _scheduleScrollRestore(anchor: anchor, previousTop: previousTop);
+      }
+    }
+
+    unawaited(RecentPagesService.removeRecentPage(pageId));
+    unawaited(
+      AppLogger.log(
+        'Home',
+        '检测到记录已删除并从列表移除: reason=$reason pageId=$pageId',
+      ),
+    );
   }
 
   String _blocksToMarkdown(List<dynamic> blocks) {
@@ -1445,6 +1611,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                 if (row is _MonthGroupHeader) {
                   return ListTile(
+                    key: _monthRowKey(row.key),
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 16,
                     ),
@@ -1606,7 +1773,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildPageListTile(Map<String, dynamic> page) {
+    final pageId = _normalizePageId(page['id']?.toString());
     return ListTile(
+      key: _pageRowKey(pageId),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
       title: Text(
         _pageTitle(page),

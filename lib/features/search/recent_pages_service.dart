@@ -84,6 +84,17 @@ class RecentPagesService {
     );
   }
 
+  static Future<void> removeRecentPage(String pageId) async {
+    if (pageId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final pages = await getRecentPages();
+    pages.removeWhere((page) => page.pageId == pageId);
+    await prefs.setString(
+      _key,
+      jsonEncode(pages.map((page) => page.toJson()).toList()),
+    );
+  }
+
   static Future<String?> getCachedPrivateSearchSeedPageId() async {
     final prefs = await SharedPreferences.getInstance();
     final pageId = _normalizePageId(
