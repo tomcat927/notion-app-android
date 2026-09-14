@@ -29,6 +29,7 @@ class DatabaseView {
     this.isNative = false,
     this.filter,
     this.sorts = const [],
+    this.groupBy,
   });
 
   final String id;
@@ -36,6 +37,7 @@ class DatabaseView {
   final bool isNative;
   final Map<String, dynamic>? filter;
   final List<Map<String, dynamic>> sorts;
+  final Map<String, dynamic>? groupBy;
 }
 
 class HomeScreen extends StatefulWidget {
@@ -107,6 +109,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _showElementInspector = false;
   bool _cleaningCache = false;
   String? _pendingBrowserRefreshPageId;
+  final Set<String> _collapsedMonthGroups = {};
+  final Map<String, String> _monthGroupTitles = {};
 
   @override
   void dispose() {
@@ -314,6 +318,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final aFilter = a.filter == null ? '' : jsonEncode(a.filter);
     final bFilter = b.filter == null ? '' : jsonEncode(b.filter);
     if (aFilter != bFilter) return true;
+    final aGroupBy = a.groupBy == null ? '' : jsonEncode(a.groupBy);
+    final bGroupBy = b.groupBy == null ? '' : jsonEncode(b.groupBy);
+    if (aGroupBy != bGroupBy) return true;
     return jsonEncode(a.sorts) != jsonEncode(b.sorts);
   }
 
@@ -505,6 +512,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final type = detail['type']?.toString() ?? 'view';
       final filter = detail['filter'];
       final sorts = detail['sorts'];
+      final format = detail['format'];
+      final rawGroupBy = detail['group_by'] ??
+          (format is Map ? format['group_by'] : null) ??
+          (format is Map ? format['group'] : null);
 
       return DatabaseView(
         id: viewId,
@@ -514,6 +525,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         sorts: sorts is List
             ? List<Map<String, dynamic>>.from(sorts)
             : const [],
+        groupBy:
+            rawGroupBy is Map<String, dynamic> ? rawGroupBy : null,
       );
     } catch (error) {
       await AppLogger.log('Home', '读取视图详情失败 $viewId: $error');
@@ -811,7 +824,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('selected_view_id:$_sourceId', id);
     if (!mounted) return;
-    setState(() => _viewId = id);
+    setState(() {
+      _viewId = id;
+      _collapsedMonthGroups.clear();
+    });
     await _loadRows();
   }
 
@@ -1282,6 +1298,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return _buildPageContent();
     }
 
+    final listRows = _buildListRows();
     return RefreshIndicator(
       onRefresh: _loadRows,
       child: CustomScrollView(
@@ -1349,11 +1366,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             )
           else
             SliverList.separated(
-              itemCount: _pages.length + (_hasMore ? 1 : 0),
+              itemCount: listRows.length,
               separatorBuilder: (context, index) =>
                   const Divider(height: 1, indent: 16, endIndent: 16),
               itemBuilder: (context, index) {
-                if (index >= _pages.length) {
+                final row = listRows[index];
+                if (row is _LoadMoreRow) {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Center(
@@ -1372,29 +1390,154 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   );
                 }
 
-                final page = _pages[index];
-                return ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                  title: Text(
-                    _pageTitle(page),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    _searchActive && _searchScope == 'all'
-                        ? '${_sourceLabelForPage(page)} · 最后编辑 ${_formatDateTime(page['last_edited_time']?.toString())}'
-                        : '最后编辑 ${_formatDateTime(page['last_edited_time']?.toString())}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  trailing: const Icon(Icons.chevron_right, size: 20),
-                  onTap: () => _openPageInBrowser(page),
+                if (row is _MonthGroupHeader) {
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                    ),
+                    leading: Icon(
+                      row.expanded
+                          ? Icons.expand_more
+                          : Icons.chevron_right,
+                    ),
+                    title: Text(row.title),
+                    subtitle: Text('${row.count} 条'),
+                    onTap: () {
+                      setState(() {
+                        if (row.expanded) {
+                          _collapsedMonthGroups.add(row.key);
+                        } else {
+                          _collapsedMonthGroups.remove(row.key);
+                        }
+                      });
+                    },
+                  );
+                }
+
+                return _buildPageListTile(
+                  row is _PageRow ? row.page : (row as _GroupedPageRow).page,
                 );
               },
             ),
         ],
       ),
+    );
+  }
+
+  bool get _monthGroupingEnabled {
+    final view = _activeView;
+    if (view == null || _searchActive) return false;
+    return view.label.contains('按月');
+  }
+
+  List<Object> _buildListRows() {
+    if (!_monthGroupingEnabled) {
+      final rows = <Object>[
+        for (final page in _pages) _PageRow(page),
+      ];
+      if (_hasMore) rows.add(const _LoadMoreRow());
+      return rows;
+    }
+
+    final groupedPages = <String, List<Map<String, dynamic>>>{};
+    for (final page in _pages) {
+      final date = _pageGroupDate(page);
+      final key = '${date.year}-${date.month.toString().padLeft(2, '0')}';
+      final title = '${date.year}年${date.month}月';
+      groupedPages.putIfAbsent(key, () => []).add(page);
+      _monthGroupTitles[key] = title;
+    }
+
+    final rows = <Object>[];
+    for (final entry in groupedPages.entries) {
+      final key = entry.key;
+      final pages = entry.value;
+      final expanded = !_collapsedMonthGroups.contains(key);
+      rows.add(
+        _MonthGroupHeader(
+          key: key,
+          title: _monthGroupTitles[key] ?? key,
+          count: pages.length,
+          expanded: expanded,
+        ),
+      );
+      if (expanded) {
+        rows.addAll(pages.map((page) => _GroupedPageRow(page)));
+      }
+    }
+    if (_hasMore) rows.add(const _LoadMoreRow());
+    return rows;
+  }
+
+  DateTime _pageGroupDate(Map<String, dynamic> page) {
+    final groupBy = _activeView?.groupBy;
+    final properties =
+        page['properties'] as Map<String, dynamic>? ?? const {};
+
+    final propertyName = _groupByPropertyName(groupBy);
+    if (propertyName != null && properties.containsKey(propertyName)) {
+      final parsed = _parseDatePropertyValue(properties[propertyName]);
+      if (parsed != null) return parsed;
+    }
+
+    if (_activeView?.label.contains('按月') == true) {
+      for (final property in properties.values) {
+        if (property is Map && property['type'] == 'created_time') {
+          final parsed = _parseDatePropertyValue(property);
+          if (parsed != null) return parsed;
+        }
+      }
+      final pageCreated =
+          DateTime.tryParse(page['created_time']?.toString() ?? '');
+      if (pageCreated != null) return pageCreated.toLocal();
+    }
+
+    return DateTime.tryParse(page['last_edited_time']?.toString() ?? '')
+            ?.toLocal() ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  String? _groupByPropertyName(Map<String, dynamic>? groupBy) {
+    if (groupBy == null) return null;
+    final raw = groupBy['property'] ??
+        groupBy['field'] ??
+        groupBy['sub_property'];
+    if (raw == null) return null;
+    if (raw is Map) {
+      return raw['name']?.toString() ??
+          raw['id']?.toString() ??
+          raw['property']?.toString();
+    }
+    return raw.toString();
+  }
+
+  DateTime? _parseDatePropertyValue(Object? property) {
+    if (property is! Map) return null;
+    final dateValue = property['date']?['start']?.toString() ??
+        property['created_time']?.toString() ??
+        property['last_edited_time']?.toString();
+    final parsed = DateTime.tryParse(dateValue ?? '');
+    return parsed?.toLocal();
+  }
+
+  Widget _buildPageListTile(Map<String, dynamic> page) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      title: Text(
+        _pageTitle(page),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(
+        _searchActive && _searchScope == 'all'
+            ? '${_sourceLabelForPage(page)} · 最后编辑 ${_formatDateTime(page['last_edited_time']?.toString())}'
+            : '最后编辑 ${_formatDateTime(page['last_edited_time']?.toString())}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 12),
+      ),
+      trailing: const Icon(Icons.chevron_right, size: 20),
+      onTap: () => _openPageInBrowser(page),
     );
   }
 
@@ -1872,4 +2015,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ],
     );
   }
+}
+
+class _PageRow {
+  const _PageRow(this.page);
+
+  final Map<String, dynamic> page;
+}
+
+class _GroupedPageRow {
+  const _GroupedPageRow(this.page);
+
+  final Map<String, dynamic> page;
+}
+
+class _MonthGroupHeader {
+  const _MonthGroupHeader({
+    required this.key,
+    required this.title,
+    required this.count,
+    required this.expanded,
+  });
+
+  final String key;
+  final String title;
+  final int count;
+  final bool expanded;
+}
+
+class _LoadMoreRow {
+  const _LoadMoreRow();
 }
