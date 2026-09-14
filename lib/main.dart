@@ -12,6 +12,7 @@ import 'package:notion_app/core/notion_auth.dart';
 import 'package:notion_app/core/network_proxy.dart';
 
 import 'package:notion_app/core/app_logger.dart';
+import 'package:notion_app/core/cache_cleanup_service.dart';
 
 Future<void> main() async {
   await runZonedGuarded<Future<void>>(
@@ -38,6 +39,7 @@ Future<void> main() async {
       await NetworkProxy.initialize();
       await SharedPreferences.getInstance();
       await AppLogger.init();
+      unawaited(CacheCleanupService.cleanupStartupCaches());
 
       final token = await NotionAuth.getToken();
       final hasToken = token != null && token.isNotEmpty;

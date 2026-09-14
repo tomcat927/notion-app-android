@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.webkit.WebView
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
@@ -82,6 +83,14 @@ class MainActivity : FlutterActivity() {
                         clearNativeCrashLog()
                         result.success(true)
                     }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.notion.app/cache_cleanup")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "clearWebViewCache" -> clearWebViewCache(result)
                     else -> result.notImplemented()
                 }
             }
@@ -200,6 +209,22 @@ class MainActivity : FlutterActivity() {
             if (file.exists()) file.delete()
         } catch (ignored: Exception) {
             // Best-effort cleanup.
+        }
+    }
+
+    private fun clearWebViewCache(result: MethodChannel.Result) {
+        try {
+            WebView(this).apply {
+                clearCache(true)
+                destroy()
+            }
+            result.success(true)
+        } catch (error: Exception) {
+            result.error(
+                "webview_cache_cleanup_failed",
+                error.message ?: "无法清理 WebView 缓存",
+                null,
+            )
         }
     }
 

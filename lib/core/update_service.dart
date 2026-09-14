@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_logger.dart';
+import 'cache_cleanup_service.dart';
 
 class UpdateInfo {
   const UpdateInfo({
@@ -162,6 +163,7 @@ class UpdateService {
     UpdateInfo info,
     void Function(double progress) onProgress,
   ) async {
+    await CacheCleanupService.cleanupStartupCaches();
     final baseDir = await getTemporaryDirectory();
     final updateDir = Directory(path.join(baseDir.path, 'apk_updates'));
     await updateDir.create(recursive: true);
@@ -195,6 +197,7 @@ class UpdateService {
   }
 
   static Future<void> installApk(File file) async {
+    await CacheCleanupService.markUpdatePackageForCleanup();
     await _installChannel.invokeMethod<bool>('installUpdate', {
       'path': file.path,
     });

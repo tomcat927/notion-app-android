@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/notion_auth.dart';
 import '../../core/notion_client.dart';
 import '../../core/app_logger.dart';
+import '../../core/cache_cleanup_service.dart';
 import '../../core/native_browser.dart';
 import '../../core/update_service.dart';
 import '../auth/login_screen.dart';
@@ -103,6 +104,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final NotionPrivateSearchBridge _privateSearchBridge =
       NotionPrivateSearchBridge.instance;
   bool _openExternalLinksInApp = false;
+  bool _cleaningCache = false;
   String? _pendingBrowserRefreshPageId;
 
   @override
@@ -129,6 +131,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
+
+    unawaited(CacheCleanupService.cleanupStartupCaches());
 
     final pageId = _pendingBrowserRefreshPageId;
     if (pageId == null || pageId.isEmpty) return;
@@ -1052,6 +1056,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _cleanupSafeCaches() async {
+    if (_cleaningCache) return;
+
+    setState(() => _cleaningCache = true);
+    try {
+      final report = await CacheCleanupService.cleanupSafeCaches();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '已清理 ${report.readableDeletedSize} 缓存'
+            '${report.webViewCacheCleared ? '，并清理 WebView 缓存' : ''}',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('清理缓存失败：$error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _cleaningCache = false);
+      }
+    }
+  }
+
   Future<void> _logout() async {
     await NotionAuth.removeToken();
     if (mounted) {
@@ -1747,6 +1778,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             value: _openExternalLinksInApp,
             onChanged: (value) =>
                 unawaited(_setOpenExternalLinksInApp(value)),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: _cleaningCache
+                ? const SizedBox.square(
+                    dimension: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.cleaning_services_outlined),
+            title: const Text('清理缓存'),
+            subtitle: const Text('清理更新包、上传临时文件和 WebView 普通缓存，不清登录状态'),
+            trailing: const Icon(Icons.chevron_right),
+            enabled: !_cleaningCache,
+            onTap: _cleaningCache
+                ? null
+                : () => unawaited(_cleanupSafeCaches()),
           ),
         ),
         const SizedBox(height: 8),
