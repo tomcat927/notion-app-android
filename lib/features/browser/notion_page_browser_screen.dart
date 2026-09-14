@@ -55,6 +55,7 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   String _errorDescription = '';
   Completer<String>? _privateSearchCompleter;
   bool _openExternalLinksInApp = false;
+  bool _showElementInspector = false;
   bool _elementInspectorActive = false;
 
   @override
@@ -127,8 +128,12 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
 
   Future<void> _loadBrowserPreferences() async {
     final openExternalLinksInApp = await NativeBrowser.openExternalLinksInApp();
+    final showElementInspector = await NativeBrowser.showElementInspector();
     if (!mounted) return;
-    setState(() => _openExternalLinksInApp = openExternalLinksInApp);
+    setState(() {
+      _openExternalLinksInApp = openExternalLinksInApp;
+      _showElementInspector = showElementInspector;
+    });
   }
 
   Future<List<String>> _onShowFileSelector(FileSelectorParams params) async {
@@ -873,15 +878,16 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
-            IconButton(
-              icon: Icon(
-                _elementInspectorActive
-                    ? Icons.touch_app
-                    : Icons.manage_search,
+            if (_showElementInspector)
+              IconButton(
+                icon: Icon(
+                  _elementInspectorActive
+                      ? Icons.touch_app
+                      : Icons.manage_search,
+                ),
+                tooltip: '网页控件诊断',
+                onPressed: _startElementInspector,
               ),
-              tooltip: '网页控件诊断',
-              onPressed: _startElementInspector,
-            ),
             IconButton(
               icon: const Icon(Icons.manage_search),
               tooltip: '验证网页全文搜索',

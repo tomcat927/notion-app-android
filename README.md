@@ -55,7 +55,11 @@ flutter build appbundle --release
 
 ## 版本号
 
-使用中国时区时间（`Asia/Shanghai`）自动生成版本号，格式 `YYYYMMDD`。
+使用中国时区时间（`Asia/Shanghai`）自动生成构建时间，格式 `YYYYMMDDHHmmss`。
+
+- App 内显示：`0.1.0 (YYYYMMDD HHmmss)`
+- Release/APK 标签：`v0.1.0-YYYYMMDDHHmmss`
+- Android 内部 `versionCode` 继续使用秒级 Unix 时间戳，以满足 Android 的整数范围限制并保持新旧版本比较可靠。
 
 ## 项目结构
 

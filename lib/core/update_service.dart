@@ -33,6 +33,18 @@ class UpdateInfo {
   final String fallbackChecksumUrl;
   final String releaseUrl;
   final String? releaseNotes;
+
+  String get displayVersion {
+    final match = RegExp(
+      r'^v(.+)-(\d{8})(\d{2})(\d{2})(\d{2})$',
+    ).firstMatch(tagName);
+    if (match == null) return tagName;
+
+    String two(String value) => value.padLeft(2, '0');
+    return '${match.group(1)} (${match.group(2)} '
+        '${two(match.group(3)!)}${two(match.group(4)!)}'
+        '${two(match.group(5)!)}';
+  }
 }
 
 class UpdateService {
@@ -130,9 +142,6 @@ class UpdateService {
 
     final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map;
     final tagName = data['tag_name']?.toString() ?? '';
-    final versionCode = int.tryParse(
-      RegExp(r'-(\d+)$').firstMatch(tagName)?.group(1) ?? '',
-    );
     final assets = List<Map<String, dynamic>>.from(data['assets'] ?? []);
     final apk = assets.firstWhere(
       (asset) => (asset['name']?.toString() ?? '').endsWith('.apk'),
@@ -143,6 +152,7 @@ class UpdateService {
     final directUrl = apk['browser_download_url']?.toString() ?? '';
     final directChecksumUrl =
         checksum['browser_download_url']?.toString() ?? '';
+    final versionCode = _versionCodeFromTag(tagName);
     if (versionCode == null || directUrl.isEmpty || directChecksumUrl.isEmpty) {
       return null;
     }
@@ -276,5 +286,29 @@ class UpdateService {
 
   static Future<String> _sha256(File file) async {
     return sha256.convert(await file.readAsBytes()).toString();
+  }
+
+  static int? _versionCodeFromTag(String tagName) {
+    final buildTimeMatch = RegExp(
+      r'-(\d{8})(\d{2})(\d{2})(\d{2})$',
+    ).firstMatch(tagName);
+    if (buildTimeMatch != null) {
+      final timestamp = buildTimeMatch.group(1)!;
+      final year = int.parse(timestamp.substring(0, 4));
+      final month = int.parse(timestamp.substring(4, 6));
+      final day = int.parse(timestamp.substring(6, 8));
+      final hour = int.parse(buildTimeMatch.group(2)!);
+      final minute = int.parse(buildTimeMatch.group(3)!);
+      final second = int.parse(buildTimeMatch.group(4)!);
+
+      return DateTime.utc(year, month, day, hour, minute, second)
+              .subtract(const Duration(hours: 8))
+              .millisecondsSinceEpoch ~/
+          1000;
+    }
+
+    return int.tryParse(
+      RegExp(r'-(\d+)$').firstMatch(tagName)?.group(1) ?? '',
+    );
   }
 }

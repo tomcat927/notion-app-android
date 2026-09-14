@@ -39,12 +39,15 @@ class BrowserActivity : Activity() {
     private var webView: WebView? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var openExternalLinksInApp: Boolean = false
+    private var showElementInspectorToolbar: Boolean = false
     private var elementInspectorActive: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         openExternalLinksInApp =
             intent.getBooleanExtra(EXTRA_OPEN_EXTERNAL_LINKS_IN_APP, false)
+        showElementInspectorToolbar =
+            intent.getBooleanExtra(EXTRA_SHOW_ELEMENT_INSPECTOR, false)
         title = intent.getStringExtra(EXTRA_TITLE).takeUnless { it.isNullOrBlank() } ?: "Notion"
         setContentView(createContentView())
         createWebView()
@@ -110,18 +113,20 @@ class BrowserActivity : Activity() {
             ),
         )
 
-        toolbar.addView(
-            Button(this).apply {
-                text = "控件"
-                textSize = 13f
-                isAllCaps = false
-                setOnClickListener { toggleElementInspector() }
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
+        if (showElementInspectorToolbar) {
+            toolbar.addView(
+                Button(this).apply {
+                    text = "控件"
+                    textSize = 13f
+                    isAllCaps = false
+                    setOnClickListener { toggleElementInspector() }
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
 
         titleView = TextView(this).apply {
             text = title
@@ -484,6 +489,7 @@ class BrowserActivity : Activity() {
         const val EXTRA_PAGE_ID = "pageId"
         const val EXTRA_TITLE = "title"
         const val EXTRA_OPEN_EXTERNAL_LINKS_IN_APP = "openExternalLinksInApp"
+        const val EXTRA_SHOW_ELEMENT_INSPECTOR = "showElementInspector"
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
         private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +

@@ -69,6 +69,7 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("pageId"),
                         call.argument<String>("title"),
                         call.argument<Boolean>("openExternalLinksInApp"),
+                        call.argument<Boolean>("showElementInspector"),
                         result,
                     )
                     else -> result.notImplemented()
@@ -266,6 +267,7 @@ class MainActivity : FlutterActivity() {
         pageId: String?,
         title: String?,
         openExternalLinksInApp: Boolean?,
+        showElementInspector: Boolean?,
         result: MethodChannel.Result,
     ) {
         if (pageId.isNullOrBlank()) {
@@ -280,6 +282,10 @@ class MainActivity : FlutterActivity() {
                 putExtra(
                     BrowserActivity.EXTRA_OPEN_EXTERNAL_LINKS_IN_APP,
                     openExternalLinksInApp == true,
+                )
+                putExtra(
+                    BrowserActivity.EXTRA_SHOW_ELEMENT_INSPECTOR,
+                    showElementInspector == true,
                 )
             }
             startActivity(intent)

@@ -29,11 +29,15 @@ jobs:
       - name: Generate version info
         id: version
         run: |
+          export TZ=Asia/Shanghai
           VERSION_CODE=$(date +%s)
-          TAG="v${APP_VERSION}-${VERSION_CODE}"
+          BUILD_TIME=$(date +%Y%m%d%H%M%S)
+          DISPLAY_TIME="${BUILD_TIME:0:8} ${BUILD_TIME:8:6}"
+          TAG="v${APP_VERSION}-${BUILD_TIME}"
           echo "code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Generated ${TAG} (versionCode: ${VERSION_CODE})"
+          echo "display=${DISPLAY_TIME}" >> "$GITHUB_OUTPUT"
+          echo "Generated ${TAG} (versionCode: ${VERSION_CODE}; display: ${DISPLAY_TIME})"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -86,6 +90,7 @@ jobs:
         id: assets
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          DISPLAY_TIME: ${{ steps.version.outputs.display }}
         run: |
           APK_NAME="notion-app-${TAG}.apk"
           CHECKSUM_NAME="${APK_NAME}.sha256"
@@ -101,6 +106,7 @@ jobs:
           cat > latest.json <<EOF
           {
             "tag_name": "${TAG}",
+            "version_display": "${APP_VERSION} (${DISPLAY_TIME})",
             "version_code": ${{ steps.version.outputs.code }},
             "apk": "${PROXY_URL}",
             "github_apk": "${GITHUB_URL}",
@@ -129,6 +135,10 @@ jobs:
           git push origin "$TAG"
 
           cat > release-notes.md <<EOF
+          ## 版本
+
+          - 版本：${APP_VERSION} (${DISPLAY_TIME})
+
           ## Android APK 下载
 
           - [国内加速下载](${PROXY_URL})

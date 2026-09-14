@@ -169,7 +169,7 @@ class _UpdateSectionState extends State<UpdateSection> {
           if (_updateInfo != null) ...[
             ListTile(
               leading: const Icon(Icons.system_update),
-              title: Text('新版本 ${_updateInfo!.tagName}'),
+              title: Text('新版本 ${_updateInfo!.displayVersion}'),
               subtitle: Text(
                 _updateInfo!.releaseNotes?.trim().isNotEmpty == true
                     ? _updateInfo!.releaseNotes!.trim()

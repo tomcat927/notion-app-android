@@ -104,6 +104,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final NotionPrivateSearchBridge _privateSearchBridge =
       NotionPrivateSearchBridge.instance;
   bool _openExternalLinksInApp = false;
+  bool _showElementInspector = false;
   bool _cleaningCache = false;
   String? _pendingBrowserRefreshPageId;
 
@@ -148,8 +149,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _loadBrowserPreferences() async {
     final openExternalLinksInApp = await NativeBrowser.openExternalLinksInApp();
+    final showElementInspector = await NativeBrowser.showElementInspector();
     if (!mounted) return;
-    setState(() => _openExternalLinksInApp = openExternalLinksInApp);
+    setState(() {
+      _openExternalLinksInApp = openExternalLinksInApp;
+      _showElementInspector = showElementInspector;
+    });
   }
 
   Future<void> _setOpenExternalLinksInApp(bool value) async {
@@ -1056,6 +1061,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _setShowElementInspector(bool value) async {
+    await NativeBrowser.setShowElementInspector(value);
+    if (!mounted) return;
+    setState(() => _showElementInspector = value);
+    unawaited(
+      AppLogger.log(
+        'Settings',
+        '网页控件诊断按钮: ${value ? 'on' : 'off'}',
+      ),
+    );
+  }
+
   Future<void> _cleanupSafeCaches() async {
     if (_cleaningCache) return;
 
@@ -1829,6 +1846,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     await AppLogger.setLayoutDebugEnabled(value);
                     setState(() {});
                   }
+                : null,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: SwitchListTile(
+            title: const Text('网页控件诊断按钮'),
+            subtitle: const Text('开启后，笔记页顶部显示“控件”按钮，用于检查网页元素；需先开启调试日志'),
+            value: _showElementInspector,
+            onChanged: AppLogger.isEnabled
+                ? (value) =>
+                    unawaited(_setShowElementInspector(value))
                 : null,
           ),
         ),

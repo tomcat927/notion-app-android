@@ -19,7 +19,7 @@ Future<void> showUpdatePrompt(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                updateInfo.tagName,
+                updateInfo.displayVersion,
                 style: Theme.of(dialogContext).textTheme.titleMedium,
               ),
               const SizedBox(height: 8),

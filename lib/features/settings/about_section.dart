@@ -40,9 +40,11 @@ class _AboutSectionState extends State<AboutSection> {
 
   @override
   Widget build(BuildContext context) {
+    final buildNumber =
+        int.tryParse(_packageInfo?.buildNumber ?? '') ?? 0;
     final version = _packageInfo == null
         ? '读取中...'
-        : '${_packageInfo!.version} (${_packageInfo!.buildNumber})';
+        : '${_packageInfo!.version} (${_formatBuildTime(buildNumber)})';
 
     return Card(
       child: Column(
@@ -67,5 +69,17 @@ class _AboutSectionState extends State<AboutSection> {
         ],
       ),
     );
+  }
+
+  String _formatBuildTime(int buildNumber) {
+    if (buildNumber <= 0) return '未知时间';
+    final time = DateTime.fromMillisecondsSinceEpoch(
+      buildNumber * 1000,
+      isUtc: true,
+    ).add(const Duration(hours: 8));
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${time.year.toString().padLeft(4, '0')}'
+        '${two(time.month)}${two(time.day)} '
+        '${two(time.hour)}${two(time.minute)}${two(time.second)}';
   }
 }
