@@ -8,6 +8,18 @@ class PrivateSearchSnippet {
 
   final String text;
   final String blockId;
+
+  Map<String, dynamic> toJson() => {
+        'text': text,
+        'blockId': blockId,
+      };
+
+  factory PrivateSearchSnippet.fromJson(Map<String, dynamic> json) {
+    return PrivateSearchSnippet(
+      text: json['text']?.toString() ?? '',
+      blockId: json['blockId']?.toString() ?? '',
+    );
+  }
 }
 
 class PrivateSearchHit {
@@ -30,6 +42,44 @@ class PrivateSearchHit {
   final String primaryBlockId;
   final double score;
   final List<PrivateSearchSnippet> snippets;
+
+  Map<String, dynamic> toJson() => {
+        'pageId': pageId,
+        'title': title,
+        'pathText': pathText,
+        'type': type,
+        'primarySnippet': primarySnippet,
+        'primaryBlockId': primaryBlockId,
+        'score': score,
+        'snippets': snippets.map((snippet) => snippet.toJson()).toList(),
+      };
+
+  factory PrivateSearchHit.fromJson(Map<String, dynamic> json) {
+    final rawSnippets = json['snippets'];
+    final snippets = <PrivateSearchSnippet>[];
+    if (rawSnippets is List) {
+      for (final rawSnippet in rawSnippets) {
+        if (rawSnippet is Map) {
+          snippets.add(
+            PrivateSearchSnippet.fromJson(
+              Map<String, dynamic>.from(rawSnippet),
+            ),
+          );
+        }
+      }
+    }
+
+    return PrivateSearchHit(
+      pageId: json['pageId']?.toString() ?? '',
+      title: json['title']?.toString() ?? '无标题页面',
+      pathText: json['pathText']?.toString() ?? '',
+      type: json['type']?.toString() ?? '',
+      primarySnippet: json['primarySnippet']?.toString() ?? '',
+      primaryBlockId: json['primaryBlockId']?.toString() ?? '',
+      score: num.tryParse(json['score']?.toString() ?? '')?.toDouble() ?? 0,
+      snippets: snippets,
+    );
+  }
 }
 
 class PrivateSearchResponse {

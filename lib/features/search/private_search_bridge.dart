@@ -20,6 +20,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
 
   WebViewController? _controller;
   final Map<String, Completer<String>> _searchCompleters = {};
+  Timer? _releaseTimer;
   int _probeRetryCount = 0;
   int _searchToken = 0;
   bool _started = false;
@@ -33,6 +34,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
   String? get url => _url;
 
   void start({String? seedPageId}) {
+    cancelScheduledRelease();
     if (_started) return;
 
     final seedId = seedPageId?.trim().replaceAll('-', '') ?? '';
@@ -133,6 +135,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
   }
 
   void reset() {
+    cancelScheduledRelease();
     _started = false;
     _ready = false;
     _controller = null;
@@ -146,6 +149,35 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     }
     _searchCompleters.clear();
     notifyListeners();
+  }
+
+  void scheduleRelease({
+    Duration delay = const Duration(minutes: 4),
+    String reason = 'idle',
+  }) {
+    if (_controller == null) return;
+    _releaseTimer?.cancel();
+    unawaited(
+      AppLogger.log(
+        'PrivateSearch',
+        'bridge release scheduled: reason=$reason delay=${delay.inSeconds}s',
+      ),
+    );
+    _releaseTimer = Timer(delay, () {
+      _releaseTimer = null;
+      unawaited(
+        AppLogger.log('PrivateSearch', 'bridge release timeout: reason=$reason'),
+      );
+      reset();
+    });
+  }
+
+  void cancelScheduledRelease() {
+    final timer = _releaseTimer;
+    if (timer == null) return;
+    _releaseTimer = null;
+    timer.cancel();
+    unawaited(AppLogger.log('PrivateSearch', 'bridge release cancelled'));
   }
 
   Future<String> search(String query) async {

@@ -20,7 +20,8 @@ class PrivateSearchScreen extends StatefulWidget {
   State<PrivateSearchScreen> createState() => _PrivateSearchScreenState();
 }
 
-class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
+class _PrivateSearchScreenState extends State<PrivateSearchScreen>
+    with WidgetsBindingObserver {
   final NotionPrivateSearchBridge _bridge = NotionPrivateSearchBridge.instance;
   final TextEditingController _searchController = TextEditingController();
   Timer? _debounce;
@@ -28,6 +29,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   int _bridgeStartToken = 0;
   bool _searching = false;
   bool _showCachedRecentPages = false;
+  bool _usingCachedRecentHits = false;
   bool _recentServerLoadFinished = false;
   String? _error;
   List<PrivateSearchHit> _hits = [];
@@ -36,7 +38,10 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _bridge.addListener(_onBridgeChanged);
+    _bridge.cancelScheduledRelease();
+    unawaited(_loadCachedRecentResults());
     unawaited(_startBridge());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -52,16 +57,72 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     _debounce?.cancel();
     _searchController.dispose();
     _bridge.removeListener(_onBridgeChanged);
-    _bridge.reset();
+    WidgetsBinding.instance.removeObserver(this);
+    _bridge.scheduleRelease(reason: 'search_screen_closed');
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _bridge.cancelScheduledRelease();
+      if (!_bridge.hasController) {
+        unawaited(_startBridge());
+      }
+      return;
+    }
+
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _bridge.scheduleRelease(
+        delay: const Duration(seconds: 45),
+        reason: 'app_backgrounded',
+      );
+    }
   }
 
   void _onBridgeChanged() {
     if (!mounted) return;
     setState(() {});
-    if (_bridge.isReady && _searchController.text.trim().isEmpty && _hits.isEmpty && !_searching) {
+    if (_bridge.isReady &&
+        _searchController.text.trim().isEmpty &&
+        !_recentServerLoadFinished &&
+        !_searching) {
       unawaited(_loadRecentFromApi());
     }
+  }
+
+  Future<void> _loadCachedRecentResults() async {
+    final cachedHits = await RecentPagesService.getCachedOfficialRecentHits();
+    if (!mounted ||
+        _recentServerLoadFinished ||
+        _searchController.text.trim().isNotEmpty) {
+      return;
+    }
+    if (cachedHits.isNotEmpty) {
+      setState(() {
+        _hits = cachedHits;
+        _usingCachedRecentHits = true;
+        _showCachedRecentPages = false;
+        _recentServerLoadFinished = false;
+      });
+      return;
+    }
+
+    final pages = await RecentPagesService.getRecentPages();
+    if (!mounted ||
+        _recentServerLoadFinished ||
+        pages.isEmpty ||
+        _searchController.text.trim().isNotEmpty ||
+        _hits.isNotEmpty) {
+      return;
+    }
+    setState(() {
+      _recentPages = pages;
+      _showCachedRecentPages = true;
+      _usingCachedRecentHits = false;
+      _recentServerLoadFinished = false;
+    });
   }
 
   Future<void> _loadRecentPages() async {
@@ -73,9 +134,12 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     if (!_bridge.isReady) return;
     _searchToken++;
     final token = _searchToken;
+    final hasVisibleCache = _hits.isNotEmpty || _recentPages.isNotEmpty;
     setState(() {
       _searching = true;
-      _showCachedRecentPages = false;
+      if (!hasVisibleCache) {
+        _showCachedRecentPages = false;
+      }
       _recentServerLoadFinished = false;
       _error = null;
     });
@@ -96,6 +160,11 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
         'error=${response.error} hits=${response.hits.length} '
         'first=$hitSummary',
       ));
+      if (response.error == null &&
+          response.status == 200 &&
+          response.hits.isNotEmpty) {
+        unawaited(RecentPagesService.cacheOfficialRecentHits(response.hits));
+      }
       if (!mounted || token != _searchToken) return;
       setState(() {
         if (response.error != null || response.status != 200 || response.hits.isEmpty) {
@@ -104,20 +173,25 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
             'loadRecentPages fallback: error=${response.error} '
             'status=${response.status} hitsEmpty=${response.hits.isEmpty}',
           ));
-          _hits = [];
-          _showCachedRecentPages = true;
-          unawaited(_loadRecentPages());
+          if (_hits.isEmpty) {
+            _showCachedRecentPages = true;
+            _usingCachedRecentHits = false;
+            unawaited(_loadRecentPages());
+          }
         } else {
           _showCachedRecentPages = false;
+          _usingCachedRecentHits = false;
           _hits = response.hits;
         }
       });
     } catch (error) {
       if (!mounted || token != _searchToken) return;
       setState(() {
-        _hits = [];
-        _showCachedRecentPages = true;
-        unawaited(_loadRecentPages());
+        if (_hits.isEmpty) {
+          _showCachedRecentPages = true;
+          _usingCachedRecentHits = false;
+          unawaited(_loadRecentPages());
+        }
       });
       unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages failed: $error'));
     } finally {
@@ -148,7 +222,12 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
   Future<void> _search(String rawQuery) async {
     final query = rawQuery.trim();
     if (!_bridge.isReady) {
-      setState(() => _error = 'Notion 会话未就绪');
+      setState(() {
+        _error = 'Notion 会话未就绪';
+        _hits = [];
+        _showCachedRecentPages = false;
+        _usingCachedRecentHits = false;
+      });
       return;
     }
 
@@ -157,6 +236,8 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     setState(() {
       _searching = true;
       _error = null;
+      _showCachedRecentPages = false;
+      _usingCachedRecentHits = false;
     });
 
     try {
@@ -215,6 +296,19 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       return recentSeed;
     }
 
+    final cachedHits = await RecentPagesService.getCachedOfficialRecentHits();
+    for (final hit in cachedHits) {
+      final pageId = hit.pageId.trim();
+      if (pageId.isEmpty) continue;
+      unawaited(
+        AppLogger.log(
+          'PrivateSearch',
+          'bridge seed fallback from official cache=$pageId',
+        ),
+      );
+      return pageId;
+    }
+
     final apiSeed = await _loadSeedPageIdFromApi();
     unawaited(
       AppLogger.log(
@@ -256,7 +350,18 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
 
   Future<void> _startBridge({bool reset = false}) async {
     final token = ++_bridgeStartToken;
-    if (reset) _bridge.reset();
+    if (reset) {
+      _bridge.reset();
+    } else if (_bridge.hasController) {
+      _bridge.cancelScheduledRelease();
+      if (_bridge.isReady &&
+          _searchController.text.trim().isEmpty &&
+          !_recentServerLoadFinished &&
+          !_searching) {
+        unawaited(_loadRecentFromApi());
+      }
+      return;
+    }
     if (!mounted || token != _bridgeStartToken) return;
     final seedPageId = await _resolveBridgeSeedPageId();
     if (!mounted || token != _bridgeStartToken) return;
@@ -267,6 +372,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     setState(() {
       _hits = [];
       _showCachedRecentPages = false;
+      _usingCachedRecentHits = false;
       _recentServerLoadFinished = false;
     });
     unawaited(_startBridge(reset: true));
@@ -296,7 +402,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
       ),
     );
     if (mounted) {
-      _bridge.start(seedPageId: widget.bridgePageId ?? pageId);
+      unawaited(_startBridge());
     }
   }
 
@@ -358,7 +464,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
                     ),
                   ),
                 ),
-                if (!_bridge.isReady)
+                if (!_bridge.isReady && !_hasVisibleRecentResults)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Card(
@@ -393,6 +499,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
                       ),
                     ),
                   ),
+                _buildRecentSyncStatus(),
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -412,12 +519,53 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen> {
     );
   }
 
+  bool get _isRecentMode => _searchController.text.trim().isEmpty;
+
+  bool get _hasVisibleRecentResults {
+    return _isRecentMode &&
+        (_hits.isNotEmpty ||
+            (_showCachedRecentPages && _recentPages.isNotEmpty));
+  }
+
+  Widget _buildRecentSyncStatus() {
+    if (!_hasVisibleRecentResults || _recentServerLoadFinished) {
+      return const SizedBox.shrink();
+    }
+
+    final text = _bridge.isReady
+        ? '正在同步官方最近访问…'
+        : (_usingCachedRecentHits
+            ? '已显示上次官方结果，正在连接 Notion…'
+            : '已显示本地记录，正在连接 Notion…');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: Row(
+        children: [
+          const SizedBox.square(
+            dimension: 12,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.grey,
+                  ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildResults() {
-    if (_searching && _hits.isEmpty) {
+    if (_searching && _hits.isEmpty && !_showCachedRecentPages) {
       return const Center(child: CircularProgressIndicator());
     }
     final queryIsEmpty = _searchController.text.trim().isEmpty;
     if (queryIsEmpty &&
+        _hits.isEmpty &&
         !_showCachedRecentPages &&
         (!_bridge.isReady || !_recentServerLoadFinished)) {
       return const Center(child: CircularProgressIndicator());
