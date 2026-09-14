@@ -38,12 +38,12 @@ class NativeBrowser {
 
     try {
       final openExternalInApp = await openExternalLinksInApp();
-      final showElementInspector = await showElementInspector();
+      final showInspector = await showElementInspector();
       final opened = await _channel.invokeMethod<bool>('openPage', {
         'pageId': pageId,
         'title': title,
         'openExternalLinksInApp': openExternalInApp,
-        'showElementInspector': showElementInspector,
+        'showElementInspector': showInspector,
       });
       return opened == true;
     } catch (_) {
