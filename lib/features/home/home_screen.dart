@@ -44,7 +44,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const int _firstPageSize = 15;
   static const int _loadMorePageSize = 30;
   static const int _initialViewDetailCount = 8;
@@ -103,6 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final NotionPrivateSearchBridge _privateSearchBridge =
       NotionPrivateSearchBridge.instance;
   bool _openExternalLinksInApp = false;
+  String? _pendingBrowserRefreshPageId;
 
   @override
   void dispose() {
@@ -110,6 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchController.dispose();
     _searchFocus.dispose();
     _scrollController.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     _privateSearchBridge.reset();
     super.dispose();
   }
@@ -117,10 +119,27 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scrollController.addListener(_onScroll);
     unawaited(_initialize());
     unawaited(_autoCheckForUpdates());
     unawaited(_loadBrowserPreferences());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+
+    final pageId = _pendingBrowserRefreshPageId;
+    if (pageId == null || pageId.isEmpty) return;
+
+    _pendingBrowserRefreshPageId = null;
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 600), () async {
+        if (!mounted) return;
+        await _refreshVisiblePage(pageId, reason: 'browser_return');
+      }),
+    );
   }
 
   Future<void> _loadBrowserPreferences() async {
@@ -881,6 +900,75 @@ class _HomeScreenState extends State<HomeScreen> {
     return page['id']?.toString().substring(0, 8) ?? '无标题';
   }
 
+  Future<void> _refreshVisiblePage(
+    String pageId, {
+    required String reason,
+  }) async {
+    final normalizedPageId = _normalizePageId(pageId);
+    if (normalizedPageId.isEmpty) return;
+
+    final existingIndex = _pages.indexWhere(
+      (page) => _normalizePageId(page['id']?.toString()) == normalizedPageId,
+    );
+    final selectedMatches =
+        _normalizePageId(_selectedPage?['id']?.toString()) == normalizedPageId;
+    if (existingIndex < 0 && !selectedMatches) return;
+
+    try {
+      await AppLogger.log(
+        'Home',
+        '返回后刷新单条记录: reason=$reason pageId=$pageId',
+      );
+      final response = await NotionClient.get('/pages/$pageId');
+      NotionClient.ensureSuccess(response, operation: '刷新页面信息');
+      final refreshedPage = jsonDecode(response.body) as Map<String, dynamic>;
+      if (!mounted) return;
+
+      final latestTitle = _pageTitle(refreshedPage);
+      setState(() {
+        final index = _pages.indexWhere(
+          (page) =>
+              _normalizePageId(page['id']?.toString()) == normalizedPageId,
+        );
+        if (index >= 0) {
+          final updatedPages = List<Map<String, dynamic>>.from(_pages);
+          updatedPages[index] = refreshedPage;
+          _pages = updatedPages;
+        }
+        if (_normalizePageId(_selectedPage?['id']?.toString()) ==
+            normalizedPageId) {
+          _selectedPage = refreshedPage;
+        }
+      });
+      unawaited(RecentPagesService.addRecentPage(pageId, latestTitle));
+      unawaited(
+        AppLogger.log(
+          'Home',
+          '单条记录刷新完成: pageId=$pageId title=$latestTitle',
+        ),
+      );
+    } catch (error) {
+      unawaited(
+        AppLogger.log(
+          'Home',
+          '单条记录刷新失败: pageId=$pageId error=$error',
+        ),
+      );
+    }
+  }
+
+  String _normalizePageId(String? rawPageId) {
+    if (rawPageId == null) return '';
+    final match = RegExp(
+      r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}',
+    ).firstMatch(rawPageId);
+    final compact = (match?.group(0) ?? rawPageId)
+        .replaceAll('-', '')
+        .toLowerCase()
+        .trim();
+    return RegExp(r'^[0-9a-f]{32}$').hasMatch(compact) ? compact : '';
+  }
+
   String _blocksToMarkdown(List<dynamic> blocks) {
     final buffer = StringBuffer();
     for (final block in blocks) {
@@ -1474,8 +1562,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     await AppLogger.log('Home', '使用内嵌浏览器打开: $pageId');
 
+    _pendingBrowserRefreshPageId = pageId;
     final opened = await NativeBrowser.openPage(pageId: pageId, title: title);
     if (opened || !mounted) return;
+    _pendingBrowserRefreshPageId = null;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => NotionPageBrowserScreen(
@@ -1484,6 +1574,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+    if (mounted) {
+      unawaited(_refreshVisiblePage(pageId, reason: 'flutter_browser_return'));
+    }
   }
 
   Future<void> _openPageInExternalBrowser() async {
