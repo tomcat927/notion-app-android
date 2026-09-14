@@ -309,6 +309,12 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
     .notion-sidebar {
       display: none !important;
     }
+    .notion-assistant-corner-origin-container,
+    .notion-ai-button,
+    img[alt="Notion AI face"] {
+      display: none !important;
+      visibility: hidden !important;
+    }
     .layout {
       grid-template-columns: 100% !important;
     }

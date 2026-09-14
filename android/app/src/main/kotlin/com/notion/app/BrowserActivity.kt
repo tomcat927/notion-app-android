@@ -224,6 +224,7 @@ class BrowserActivity : Activity() {
 
         override fun onPageFinished(view: WebView, url: String) {
             titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
+            view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
             if (elementInspectorActive) {
                 installElementInspector()
             }
@@ -487,6 +488,23 @@ class BrowserActivity : Activity() {
         private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/141.0.0.0 Mobile Safari/537.36"
+
+        private const val HIDE_NOTION_FLOATERS_SCRIPT = """
+(() => {
+  const styleId = 'notion-floaters-hide-style';
+  let style = document.getElementById(styleId);
+  if (!style) {
+    style = document.createElement('style');
+    style.id = styleId;
+    document.head.appendChild(style);
+  }
+  style.textContent = [
+    '.notion-assistant-corner-origin-container',
+    '.notion-ai-button',
+    'img[alt="Notion AI face"]'
+  ].join(', ') + ' { display: none !important; visibility: hidden !important; }';
+})();
+"""
 
         private const val ELEMENT_INSPECTOR_SCRIPT = """
 (() => {
