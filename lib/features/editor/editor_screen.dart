@@ -255,7 +255,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
     if (selected == null || !mounted) return;
     final targetContext = _blockKeys[selected]?.currentContext;
-    if (targetContext == null) return;
+    if (targetContext == null || !targetContext.mounted) return;
     await Scrollable.ensureVisible(
       targetContext,
       duration: const Duration(milliseconds: 300),
