@@ -11,6 +11,7 @@ import '../../core/notion_client.dart';
 import '../../core/app_logger.dart';
 import '../../core/cache_cleanup_service.dart';
 import '../../core/native_browser.dart';
+import '../../core/remote_log_service.dart';
 import '../../core/update_service.dart';
 import '../auth/login_screen.dart';
 import '../browser/notion_page_browser_screen.dart';
@@ -108,6 +109,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _openExternalLinksInApp = false;
   bool _showElementInspector = false;
   bool _cleaningCache = false;
+  RemoteLogConfig? _remoteLogConfig;
+  bool _remoteLogBusy = false;
   String? _pendingBrowserRefreshPageId;
   bool _monthGroupsAutoExpanded = true;
   bool _loadingAll = false;
@@ -136,6 +139,197 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_autoCheckForUpdates());
     unawaited(_loadBrowserPreferences());
     unawaited(_loadMonthGroupPreference());
+    unawaited(_loadRemoteLogConfig());
+  }
+
+  Future<void> _loadRemoteLogConfig() async {
+    final config = await RemoteLogService.loadConfig();
+    if (!mounted) return;
+    setState(() => _remoteLogConfig = config);
+  }
+
+  Future<void> _setRemoteLogEnabled(bool value) async {
+    await RemoteLogService.setEnabled(value);
+    await _loadRemoteLogConfig();
+  }
+
+  Future<void> _showRemoteLogSettings() async {
+    final config = _remoteLogConfig ?? await RemoteLogService.loadConfig();
+    if (!mounted) return;
+
+    final baseUrlController = TextEditingController(text: config.baseUrl);
+    final usernameController = TextEditingController(text: config.username);
+    final passwordController = TextEditingController();
+    final targetPathController = TextEditingController(text: config.targetPath);
+    var enabled = config.enabled;
+    var busy = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('远程诊断日志'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('启用手动上传'),
+                  subtitle: const Text('默认仅上传经过脱敏的诊断日志'),
+                  value: enabled,
+                  onChanged: busy
+                      ? null
+                      : (value) => setDialogState(() => enabled = value),
+                ),
+                TextField(
+                  controller: baseUrlController,
+                  enabled: !busy,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    labelText: 'OpenList 服务地址',
+                    hintText: 'https://openlist.example.com',
+                  ),
+                ),
+                TextField(
+                  controller: usernameController,
+                  enabled: !busy,
+                  decoration: const InputDecoration(labelText: '用户名'),
+                ),
+                TextField(
+                  controller: passwordController,
+                  enabled: !busy,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: '密码',
+                    hintText: '留空则保留已保存密码',
+                  ),
+                ),
+                TextField(
+                  controller: targetPathController,
+                  enabled: !busy,
+                  decoration: const InputDecoration(
+                    labelText: '远程目录',
+                    hintText: '/notion-app/logs',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '密码和登录令牌保存在系统安全存储中。日志上传前会移除凭据、Cookie、URL、邮箱、页面 UUID 和本地路径。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setDialogState(() => busy = true);
+                      try {
+                        await RemoteLogService.testConnection(
+                          baseUrl: baseUrlController.text,
+                          username: usernameController.text,
+                          password: passwordController.text,
+                        );
+                        if (!dialogContext.mounted) return;
+                        ScaffoldMessenger.of(this.context).showSnackBar(
+                          const SnackBar(content: Text('OpenList 连接成功')),
+                        );
+                      } catch (error) {
+                        if (!dialogContext.mounted) return;
+                        ScaffoldMessenger.of(this.context).showSnackBar(
+                          SnackBar(content: Text('连接失败：$error')),
+                        );
+                      } finally {
+                        if (dialogContext.mounted) {
+                          setDialogState(() => busy = false);
+                        }
+                      }
+                    },
+              child: const Text('测试连接'),
+            ),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setDialogState(() => busy = true);
+                      try {
+                        await RemoteLogService.saveConfig(
+                          enabled: enabled,
+                          baseUrl: baseUrlController.text,
+                          username: usernameController.text,
+                          password: passwordController.text,
+                          targetPath: targetPathController.text,
+                        );
+                        if (!dialogContext.mounted) return;
+                        Navigator.pop(dialogContext);
+                        await _loadRemoteLogConfig();
+                      } catch (error) {
+                        if (!dialogContext.mounted) return;
+                        ScaffoldMessenger.of(this.context).showSnackBar(
+                          SnackBar(content: Text('保存失败：$error')),
+                        );
+                        setDialogState(() => busy = false);
+                      }
+                    },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    baseUrlController.dispose();
+    usernameController.dispose();
+    passwordController.dispose();
+    targetPathController.dispose();
+  }
+
+  Future<void> _uploadRemoteDiagnosticLog() async {
+    if (_remoteLogBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('上传脱敏诊断日志？'),
+        content: const Text(
+          '只会手动上传当前诊断快照。凭据、Cookie、URL、邮箱、页面 UUID 和本地路径会在上传前移除。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('上传'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _remoteLogBusy = true);
+    try {
+      final result = await RemoteLogService.uploadDiagnosticLog();
+      await _loadRemoteLogConfig();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('诊断日志已上传：${result.remotePath}')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('上传失败：$error')),
+      );
+    } finally {
+      if (mounted) setState(() => _remoteLogBusy = false);
+    }
   }
 
   @override
@@ -2246,6 +2440,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             title: const Text('查看调试 / 崩溃日志'),
             trailing: const Icon(Icons.chevron_right),
             onTap: _showDebugLogs,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [
+              SwitchListTile(
+                secondary: const Icon(Icons.cloud_upload_outlined),
+                title: const Text('远程诊断日志'),
+                subtitle: const Text('手动上传脱敏日志到你的 OpenList'),
+                value: _remoteLogConfig?.enabled ?? false,
+                onChanged: _remoteLogBusy
+                    ? null
+                    : (value) => unawaited(_setRemoteLogEnabled(value)),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.settings_outlined),
+                title: const Text('配置 OpenList'),
+                subtitle: Text(
+                  _remoteLogConfig?.isConfigured == true
+                      ? '${_remoteLogConfig!.baseUrl}${_remoteLogConfig!.targetPath}'
+                      : '设置服务地址、专用账号和远程目录',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _remoteLogBusy ? null : _showRemoteLogSettings,
+              ),
+              ListTile(
+                leading: _remoteLogBusy
+                    ? const SizedBox.square(
+                        dimension: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.upload_file_outlined),
+                title: const Text('立即上传脱敏日志'),
+                subtitle: Text(
+                  _remoteLogConfig?.lastUploadAt == null
+                      ? '不会自动上传，单次上限 2 MB'
+                      : '上次上传：${_remoteLogConfig!.lastUploadAt}',
+                ),
+                enabled: !_remoteLogBusy &&
+                    (_remoteLogConfig?.enabled ?? false) &&
+                    (_remoteLogConfig?.isConfigured ?? false),
+                onTap: _remoteLogBusy
+                    ? null
+                    : () => unawaited(_uploadRemoteDiagnosticLog()),
+              ),
+            ],
           ),
         ),
         Card(
