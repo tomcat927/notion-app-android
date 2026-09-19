@@ -156,6 +156,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _showRemoteLogSettings() async {
     final config = _remoteLogConfig ?? await RemoteLogService.loadConfig();
     if (!mounted) return;
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     final baseUrlController = TextEditingController(text: config.baseUrl);
     final usernameController = TextEditingController(text: config.username);
@@ -238,12 +239,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           password: passwordController.text,
                         );
                         if (!dialogContext.mounted) return;
-                        ScaffoldMessenger.of(this.context).showSnackBar(
+                        scaffoldMessenger.showSnackBar(
                           const SnackBar(content: Text('OpenList 连接成功')),
                         );
                       } catch (error) {
                         if (!dialogContext.mounted) return;
-                        ScaffoldMessenger.of(this.context).showSnackBar(
+                        scaffoldMessenger.showSnackBar(
                           SnackBar(content: Text('连接失败：$error')),
                         );
                       } finally {
@@ -272,7 +273,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         await _loadRemoteLogConfig();
                       } catch (error) {
                         if (!dialogContext.mounted) return;
-                        ScaffoldMessenger.of(this.context).showSnackBar(
+                        scaffoldMessenger.showSnackBar(
                           SnackBar(content: Text('保存失败：$error')),
                         );
                         setDialogState(() => busy = false);

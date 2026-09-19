@@ -186,12 +186,13 @@ class RemoteLogService {
     var value = input;
     value = value.replaceAll(
       RegExp(
-        r'(?i)(authorization|cookie|set-cookie|password|access[_-]?token|token)\s*[:=]\s*[^\s,;]+',
+        r'(authorization|cookie|set-cookie|password|access[_-]?token|token)\s*[:=]\s*[^\s,;]+',
+        caseSensitive: false,
       ),
       r'$1=[REDACTED]',
     );
     value = value.replaceAll(
-      RegExp(r'(?i)bearer\s+[a-z0-9._~+/-]+=*'),
+      RegExp(r'bearer\s+[a-z0-9._~+/-]+=*', caseSensitive: false),
       'Bearer [REDACTED]',
     );
     value = value.replaceAll(
@@ -207,7 +208,10 @@ class RemoteLogService {
       '[URL]',
     );
     value = value.replaceAll(
-      RegExp(r'(?i)([a-z]:\\|/storage/|/data/)[^\r\n\s]+'),
+      RegExp(
+        r'([a-z]:\\|/storage/|/data/)[^\r\n\s]+',
+        caseSensitive: false,
+      ),
       '[LOCAL_PATH]',
     );
     return value;
