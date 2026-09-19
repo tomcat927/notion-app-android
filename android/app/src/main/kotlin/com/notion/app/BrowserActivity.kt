@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
@@ -23,6 +24,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -36,6 +38,7 @@ class BrowserActivity : Activity() {
     private lateinit var titleView: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var content: LinearLayout
+    private lateinit var outlineButton: Button
     private var webView: WebView? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var openExternalLinksInApp: Boolean = false
@@ -171,11 +174,31 @@ class BrowserActivity : Activity() {
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)),
         )
 
-        content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        root.addView(
+        val browserContainer = FrameLayout(this)
+        content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        browserContainer.addView(
             content,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        outlineButton = Button(this).apply {
+            text = "大纲"
+            textSize = 13f
+            isAllCaps = false
+            visibility = View.GONE
+            setOnClickListener { showOutline() }
+        }
+        browserContainer.addView(
+            outlineButton,
+            FrameLayout.LayoutParams(dp(72), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.END or Gravity.BOTTOM
+                setMargins(dp(12), dp(12), dp(16), dp(20))
+            },
+        )
+        root.addView(
+            browserContainer,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
         )
 
@@ -206,6 +229,7 @@ class BrowserActivity : Activity() {
             userAgentString = MOBILE_USER_AGENT
         }
         view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
+        view.addJavascriptInterface(OutlineBridge(), "NotionOutline")
         CookieManager.getInstance().setAcceptCookie(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
@@ -230,6 +254,7 @@ class BrowserActivity : Activity() {
         override fun onPageFinished(view: WebView, url: String) {
             titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
             view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
+            view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
             if (elementInspectorActive) {
                 installElementInspector()
             }
@@ -255,6 +280,17 @@ class BrowserActivity : Activity() {
             destroyWebView(clearPage = false)
             showRendererGoneView(didCrash)
             return true
+        }
+    }
+
+    private fun showOutline() {
+        webView?.evaluateJavascript("window.__notionShowOutline && window.__notionShowOutline();", null)
+    }
+
+    private inner class OutlineBridge {
+        @JavascriptInterface
+        fun setVisible(visible: Boolean) {
+            runOnUiThread { outlineButton.visibility = if (visible) View.VISIBLE else View.GONE }
         }
     }
 
@@ -509,6 +545,70 @@ class BrowserActivity : Activity() {
     '.notion-ai-button',
     'img[alt="Notion AI face"]'
   ].join(', ') + ' { display: none !important; visibility: hidden !important; }';
+})();
+"""
+
+        private const val INSTALL_OUTLINE_SCRIPT = """
+(() => {
+  const collect = () => Array.from(document.querySelectorAll('h1, h2, h3'))
+    .filter(node => (node.innerText || node.textContent || '').trim())
+    .map((node, index) => {
+      if (!node.dataset.notionOutlineId) {
+        node.dataset.notionOutlineId = 'notion-outline-' + index;
+      }
+      return {
+        id: node.dataset.notionOutlineId,
+        level: Number(node.tagName.substring(1)),
+        text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim()
+      };
+    });
+
+  const updateVisibility = () => {
+    if (window.NotionOutline) {
+      window.NotionOutline.setVisible(collect().length > 0);
+    }
+  };
+
+  window.__notionShowOutline = () => {
+    const headings = collect();
+    if (!headings.length) return;
+    let panel = document.getElementById('notion-native-outline');
+    if (panel) panel.remove();
+    panel = document.createElement('div');
+    panel.id = 'notion-native-outline';
+    panel.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;max-height:65vh;overflow:auto;z-index:2147483647;background:#fff;color:#111827;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.28);padding:12px;font-family:sans-serif';
+
+    const title = document.createElement('div');
+    title.textContent = '页面大纲';
+    title.style.cssText = 'font-size:18px;font-weight:700;padding:8px 10px 12px';
+    panel.appendChild(title);
+
+    headings.forEach(heading => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.textContent = heading.text;
+      item.style.cssText = 'display:block;width:100%;border:0;background:transparent;text-align:left;padding:10px 10px 10px ' + (10 + (heading.level - 1) * 20) + 'px;font-size:15px;color:#111827';
+      item.addEventListener('click', () => {
+        const target = document.querySelector('[data-notion-outline-id="' + heading.id + '"]');
+        panel.remove();
+        if (target) target.scrollIntoView({behavior:'smooth', block:'start'});
+      });
+      panel.appendChild(item);
+    });
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '关闭';
+    close.style.cssText = 'display:block;width:100%;border:0;border-top:1px solid #e5e7eb;background:transparent;padding:12px;font-size:15px;color:#2563eb';
+    close.addEventListener('click', () => panel.remove());
+    panel.appendChild(close);
+    document.body.appendChild(panel);
+  };
+
+  updateVisibility();
+  if (window.__notionOutlineObserver) window.__notionOutlineObserver.disconnect();
+  window.__notionOutlineObserver = new MutationObserver(updateVisibility);
+  window.__notionOutlineObserver.observe(document.body, {childList:true, subtree:true, characterData:true});
 })();
 """
 
