@@ -100,11 +100,15 @@ class AppLogger {
 
   static Future<String> readLogs() async {
     final sections = <String>[];
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/notion_app_debug.log');
-    if (await file.exists()) {
-      final content = await file.readAsString();
-      if (content.isNotEmpty) sections.add(content.trimRight());
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/notion_app_debug.log');
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        if (content.isNotEmpty) sections.add(content.trimRight());
+      }
+    } catch (error) {
+      sections.add('--- Flutter 调试日志读取失败 ---\n$error');
     }
 
     final nativeLogs = await _readNativeCrashLogs();

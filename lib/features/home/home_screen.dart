@@ -1262,9 +1262,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _showDebugLogs() async {
-    final logs = await AppLogger.readLogs();
     if (!mounted) return;
-    showDialog(
+    final navigator = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    String logs;
+    try {
+      logs = await AppLogger.readLogs();
+    } catch (error) {
+      logs = '读取日志失败：$error';
+    }
+
+    if (!mounted) return;
+    navigator.pop();
+    await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('调试 / 崩溃日志'),
@@ -1280,7 +1295,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onPressed: () async {
               await AppLogger.clearLogs();
               if (ctx.mounted) Navigator.pop(ctx);
-              setState(() {});
+              if (mounted) setState(() {});
             },
             child: const Text('清空'),
           ),
