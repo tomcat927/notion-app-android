@@ -52,6 +52,8 @@ class _EditorScreenState extends State<EditorScreen> {
   static const int _maxNestedDepth = 12;
 
   final List<_BlockDraft> _blocks = [];
+  final ScrollController _scrollController = ScrollController();
+  final Map<_BlockDraft, GlobalKey> _blockKeys = {};
   bool _loading = true;
   bool _saving = false;
   bool _discardConfirmed = false;
@@ -71,8 +73,19 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void dispose() {
     _disposeBlocks(_blocks);
+    _scrollController.dispose();
     super.dispose();
   }
+
+  List<_BlockDraft> get _outlineBlocks => _blocks
+      .where(
+        (block) =>
+            block.type == 'heading_1' ||
+            block.type == 'heading_2' ||
+            block.type == 'heading_3',
+      )
+      .where((block) => block.text.trim().isNotEmpty)
+      .toList();
 
   Future<void> _loadBlocks() async {
     if (mounted) {
@@ -97,6 +110,9 @@ class _EditorScreenState extends State<EditorScreen> {
       _blocks
         ..clear()
         ..addAll(loaded);
+      _blockKeys
+        ..clear()
+        ..addEntries(_blocks.map((block) => MapEntry(block, GlobalKey())));
       for (final block in _blocks) {
         block.controller?.addListener(_onDraftChanged);
       }
@@ -171,8 +187,81 @@ class _EditorScreenState extends State<EditorScreen> {
 
   void _removeNewBlock(_BlockDraft block) {
     if (!block.isNew) return;
-    setState(() => _blocks.remove(block));
+    setState(() {
+      _blocks.remove(block);
+      _blockKeys.remove(block);
+    });
     block.dispose();
+  }
+
+  Future<void> _showOutline() async {
+    final headings = _outlineBlocks;
+    if (headings.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前页面没有标题，无法生成大纲')),
+      );
+      return;
+    }
+
+    final selected = await showModalBottomSheet<_BlockDraft>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.72,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+                child: Text(
+                  '页面大纲',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              const Divider(height: 1),
+              Flexible(
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: headings.length,
+                  itemBuilder: (context, index) {
+                    final heading = headings[index];
+                    final level = heading.headingLevel;
+                    return ListTile(
+                      contentPadding: EdgeInsets.only(
+                        left: 16.0 + (level - 1) * 20.0,
+                        right: 16,
+                      ),
+                      leading: Text('H$level'),
+                      title: Text(
+                        heading.text.trim(),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => Navigator.pop(context, heading),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (selected == null || !mounted) return;
+    final targetContext = _blockKeys[selected]?.currentContext;
+    if (targetContext == null) return;
+    await Scrollable.ensureVisible(
+      targetContext,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+      alignment: 0.08,
+    );
   }
 
   Future<void> _save() async {
@@ -345,6 +434,16 @@ class _EditorScreenState extends State<EditorScreen> {
           ],
         ),
         body: _buildBody(),
+        floatingActionButton: !_loading &&
+                _loadError == null &&
+                _outlineBlocks.isNotEmpty
+            ? FloatingActionButton.small(
+                heroTag: 'page-outline',
+                tooltip: '页面大纲',
+                onPressed: _showOutline,
+                child: const Icon(Icons.format_list_bulleted),
+              )
+            : null,
         bottomNavigationBar: _loading || _loadError != null
             ? null
             : SafeArea(
@@ -438,15 +537,17 @@ class _EditorScreenState extends State<EditorScreen> {
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
                 )
-              : ListView.builder(
+              : ListView(
+                  controller: _scrollController,
                   padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: _blocks.length,
-                  itemBuilder: (context, index) {
-                    final block = _blocks[index];
-                    return block.isEditable
-                        ? _buildEditableBlock(block)
-                        : _buildReadOnlyBlock(block);
-                  },
+                  children: _blocks.map((block) {
+                    return KeyedSubtree(
+                      key: _blockKeys.putIfAbsent(block, GlobalKey.new),
+                      child: block.isEditable
+                          ? _buildEditableBlock(block)
+                          : _buildReadOnlyBlock(block),
+                    );
+                  }).toList(),
                 ),
         ),
       ],
@@ -628,6 +729,18 @@ class _BlockDraft {
 
   bool get isNew => id == null;
   bool get isEditable => controller != null;
+  int get headingLevel {
+    switch (type) {
+      case 'heading_1':
+        return 1;
+      case 'heading_2':
+        return 2;
+      case 'heading_3':
+        return 3;
+      default:
+        return 0;
+    }
+  }
   String get text => controller?.text ?? displayText;
   bool get textChanged => isEditable && text != originalText;
   bool get checkedChanged => type == 'to_do' && checked != originalChecked;
