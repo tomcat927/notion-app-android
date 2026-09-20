@@ -4,12 +4,25 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Original folded document mark, intentionally distinct from Notion's official cube icon. -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,30 L54,78 M30,54 L78,54"
-        android:strokeWidth="6"
-        android:strokeColor="#FFFFFF"/>
+        android:strokeColor="#191919"
+        android:strokeWidth="3"
+        android:pathData="M31,24 L65,24 L78,37 L78,84 L31,84 Z" />
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M36,42 L36,66 Q36,72 42,72 L66,72 Q72,72 72,66 L72,42 Q72,36 66,36 L42,36 Q36,36 36,42 Z"/>
+        android:fillColor="#E7E7E5"
+        android:strokeColor="#191919"
+        android:strokeWidth="3"
+        android:pathData="M65,24 L65,37 L78,37 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#191919"
+        android:strokeWidth="4"
+        android:strokeLineCap="square"
+        android:strokeLineJoin="miter"
+        android:pathData="M39,61 L39,42 L52,61 L52,42" />
+    <path
+        android:fillColor="#191919"
+        android:pathData="M59,48 L72,48 L72,51 L59,51 Z M59,57 L72,57 L72,60 L59,60 Z M39,70 L70,70 L70,73 L39,73 Z" />
 </vector>
