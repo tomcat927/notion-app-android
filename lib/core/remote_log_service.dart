@@ -174,7 +174,7 @@ class RemoteLogService {
     final logs = await AppLogger.readLogs();
     final redacted = _redact(logs);
     return [
-      'Notion App diagnostic log',
+      'Notion Lite diagnostic log',
       'Generated: ${DateTime.now().toIso8601String()}',
       'Privacy: redacted snapshot; credentials and personal content removed',
       '',

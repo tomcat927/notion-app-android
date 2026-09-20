@@ -1,6 +1,6 @@
 # Clash 推荐规则
 
-本文说明 Notion App 在 Clash 中的推荐分流规则。App 的 API 请求、内嵌 Notion 编辑器和热更新请求都会使用 Android 系统代理，因此流量会先进入 Clash，再由规则决定走哪个策略组。
+本文说明 Notion Lite 在 Clash 中的推荐分流规则。App 的 API 请求、内嵌 Notion 编辑器和热更新请求都会使用 Android 系统代理，因此因此流量会先进入 Clash，再由规则决定走哪个策略组。
 
 ## 需要代理的域名
 
