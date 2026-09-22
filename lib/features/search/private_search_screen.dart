@@ -254,15 +254,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
 
   Future<void> _search(String rawQuery) async {
     final query = rawQuery.trim();
-    if (!_bridge.isReady) {
-      setState(() {
-        _error = 'Notion 会话未就绪';
-        _hits = [];
-        _showCachedRecentPages = false;
-        _usingCachedRecentHits = false;
-      });
-      return;
-    }
+    if (query.isEmpty) return;
 
     _searchToken++;
     final token = _searchToken;
@@ -274,6 +266,27 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
     });
 
     try {
+      _bridge.cancelScheduledRelease();
+      if (!_bridge.hasController) {
+        await _startBridge();
+      }
+
+      final ready = await _bridge.waitUntilReady();
+      if (!mounted || token != _searchToken) return;
+      if (!ready) {
+        setState(() {
+          _error = 'Notion 会话连接失败，请重试';
+          _hits = [];
+        });
+        unawaited(
+          AppLogger.log(
+            'PrivateSearch',
+            'search aborted: bridge not ready after 12s status=${_bridge.status}',
+          ),
+        );
+        return;
+      }
+
       final raw = await _bridge.search(query);
       final response = parsePrivateSearchResponse(raw);
       if (!mounted || token != _searchToken) return;

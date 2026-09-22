@@ -180,6 +180,18 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     unawaited(AppLogger.log('PrivateSearch', 'bridge release cancelled'));
   }
 
+  Future<bool> waitUntilReady({
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    if (_ready) return true;
+
+    final deadline = DateTime.now().add(timeout);
+    while (!_ready && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return _ready;
+  }
+
   Future<String> search(String query) async {
     final controller = _controller;
     if (controller == null || !_ready) {
