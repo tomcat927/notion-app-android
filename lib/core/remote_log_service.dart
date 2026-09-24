@@ -84,8 +84,8 @@ class RemoteLogService {
     await prefs.setString(_targetPathKey, normalizedTargetPath);
     if (password.isNotEmpty) {
       await _secureStorage.write(key: _passwordKey, value: password);
-      await _secureStorage.delete(key: _tokenKey);
     }
+    await _secureStorage.delete(key: _tokenKey);
   }
 
   static Future<void> setEnabled(bool value) async {
@@ -149,10 +149,8 @@ class RemoteLogService {
     final remoteDirectory = '${config.targetPath}/install-$installId';
     final remotePath = '$remoteDirectory/$fileName';
 
-    await _ensureDirectory(config.baseUrl, token, config.targetPath);
-    await _ensureDirectory(config.baseUrl, token, remoteDirectory);
     try {
-      await _upload(config.baseUrl, token, remotePath, bytes);
+      await _uploadWithToken(config, token, remoteDirectory, remotePath, bytes);
     } on _AuthenticationException {
       if (password.isEmpty) rethrow;
       token = await _login(
@@ -161,7 +159,7 @@ class RemoteLogService {
         password: password,
       );
       await _secureStorage.write(key: _tokenKey, value: token);
-      await _upload(config.baseUrl, token, remotePath, bytes);
+      await _uploadWithToken(config, token, remoteDirectory, remotePath, bytes);
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -262,11 +260,23 @@ class RemoteLogService {
     final code = payload['code'];
     final message = payload['message']?.toString().toLowerCase() ?? '';
     if (code == 401 || response.statusCode == 401) {
-      throw const _AuthenticationException();
+      throw _AuthenticationException(payload['message']?.toString() ?? '认证失败');
     }
     if (code != 200 && !message.contains('exist')) {
       throw StateError(payload['message']?.toString() ?? '无法创建远程日志目录');
     }
+  }
+
+  static Future<void> _uploadWithToken(
+    RemoteLogConfig config,
+    String token,
+    String remoteDirectory,
+    String remotePath,
+    List<int> bytes,
+  ) async {
+    await _ensureDirectory(config.baseUrl, token, config.targetPath);
+    await _ensureDirectory(config.baseUrl, token, remoteDirectory);
+    await _upload(config.baseUrl, token, remotePath, bytes);
   }
 
   static Future<void> _upload(
@@ -289,7 +299,7 @@ class RemoteLogService {
         .timeout(const Duration(seconds: 60));
     final payload = _decodeResponse(response);
     if (payload['code'] == 401 || response.statusCode == 401) {
-      throw const _AuthenticationException();
+      throw _AuthenticationException(payload['message']?.toString() ?? '认证失败');
     }
     if (payload['code'] != 200) {
       throw StateError(payload['message']?.toString() ?? '上传诊断日志失败');
@@ -344,5 +354,10 @@ class RemoteLogService {
 }
 
 class _AuthenticationException implements Exception {
-  const _AuthenticationException();
+  const _AuthenticationException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'OpenList 认证失败：$message';
 }
