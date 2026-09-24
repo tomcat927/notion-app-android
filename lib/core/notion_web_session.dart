@@ -15,7 +15,12 @@ class NotionWebSession {
   static const String _channelName = 'com.notion.app/cookie';
   static const MethodChannel _channel = MethodChannel(_channelName);
 
-  static const String _cookieUrl = 'https://www.notion.so';
+  static const List<String> _cookieUrls = [
+    'https://www.notion.so',
+    'https://notion.so',
+    'https://app.notion.com',
+    'https://www.app.notion.com',
+  ];
   static const String _apiBase = 'https://app.notion.com/api/v3';
   static const Duration _requestTimeout = Duration(seconds: 25);
 
@@ -32,6 +37,7 @@ class NotionWebSession {
   String? _cachedUserId;
   String? _cachedSpaceId;
   String? _cachedClientVersion;
+  String _cachedCookieHeader = '';
   bool _refreshing = false;
   Completer<void>? _refreshCompleter;
 
@@ -71,21 +77,27 @@ class NotionWebSession {
     _refreshCompleter = Completer<void>();
 
     try {
-      final Map<Object?, Object?>? raw =
-          await _channel.invokeMethod('getCookies', {'url': _cookieUrl});
-      if (raw == null) {
-        unawaited(AppLogger.log('WebSession', 'getCookies returned null'));
-        _completeRefresh();
-        return false;
+      final cookies = <String, String>{};
+      final debugSources = <String, List<String>>{};
+
+      for (final url in _cookieUrls) {
+        final Map<Object?, Object?>? raw =
+            await _channel.invokeMethod('getCookies', {'url': url});
+        if (raw == null) continue;
+        for (final entry in raw.entries) {
+          final name = entry.key?.toString() ?? '';
+          final value = entry.value?.toString() ?? '';
+          if (name.isNotEmpty && value.isNotEmpty) {
+            cookies[name] = value;
+            debugSources.putIfAbsent(name, () => []).add(url);
+          }
+        }
       }
 
-      final cookies = <String, String>{};
-      for (final entry in raw.entries) {
-        final name = entry.key?.toString() ?? '';
-        final value = entry.value?.toString() ?? '';
-        if (name.isNotEmpty && value.isNotEmpty) {
-          cookies[name] = value;
-        }
+      if (cookies.isEmpty) {
+        unawaited(AppLogger.log('WebSession', 'getCookies returned empty for all URLs'));
+        _completeRefresh();
+        return false;
       }
 
       final tokenV2 = cookies['token_v2'];
@@ -93,7 +105,7 @@ class NotionWebSession {
       if (tokenV2 == null || tokenV2.isEmpty) {
         unawaited(AppLogger.log(
           'WebSession',
-          'token_v2 missing in cookie manager; '
+          'token_v2 missing across all cookie URLs; '
           'available: ${cookies.keys.join(",")}',
         ));
         _completeRefresh();
@@ -102,6 +114,16 @@ class NotionWebSession {
 
       _cachedTokenV2 = tokenV2;
       _cachedUserId = userId;
+      _cachedCookieHeader = cookies.entries
+          .where((e) => e.key != 'cf_redirect_migration' &&
+              e.key != '__ps_r' &&
+              e.key != '__ps_lu' &&
+              e.key != '__ps_did' &&
+              e.key != '__ps_fva' &&
+              !e.key.startsWith('__cf') &&
+              !e.key.startsWith('_cf'))
+          .map((e) => '${e.key}=${e.value}')
+          .join('; ');
       await _secureStorage.write(key: _storageKeyTokenV2, value: tokenV2);
       if (userId != null && userId.isNotEmpty) {
         await _secureStorage.write(key: _storageKeyUserId, value: userId);
@@ -114,7 +136,8 @@ class NotionWebSession {
       unawaited(AppLogger.log(
         'WebSession',
         'refreshed from cookie manager: token=ok '
-        'space=${_cachedSpaceId != null} user=${_cachedUserId != null}',
+        'space=${_cachedSpaceId != null} user=${_cachedUserId != null} '
+        'sources=${cookies.keys.join(",")}',
       ));
       _completeRefresh();
       return isReady;
@@ -188,7 +211,9 @@ class NotionWebSession {
   }) {
     return {
       'content-type': 'application/json',
-      'cookie': 'token_v2=${_cachedTokenV2 ?? ""}',
+      'cookie': _cachedCookieHeader.isNotEmpty
+          ? _cachedCookieHeader
+          : 'token_v2=${_cachedTokenV2 ?? ""}',
       'x-notion-active-user-header': userId ?? '',
       'x-notion-space-id': spaceId ?? '',
       'x-notion-client-version': clientVersion ?? _defaultClientVersion,
@@ -440,6 +465,7 @@ class NotionWebSession {
     _cachedUserId = null;
     _cachedSpaceId = null;
     _cachedClientVersion = null;
+    _cachedCookieHeader = '';
     await _secureStorage.deleteAll();
   }
 }
