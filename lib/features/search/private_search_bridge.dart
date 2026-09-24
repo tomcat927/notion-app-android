@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/notion_web_session.dart';
 import 'recent_pages_service.dart';
 
 class NotionPrivateSearchBridge extends ChangeNotifier {
@@ -32,6 +33,61 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
   bool get isReady => _ready;
   String get status => _status;
   String? get url => _url;
+
+  bool get isHttpReady => NotionWebSession.instance.isReady;
+
+  Future<bool> ensureHttpReady() async {
+    final session = NotionWebSession.instance;
+    if (session.isReady) return true;
+    return session.refreshFromCookieManager();
+  }
+
+  Future<String> searchViaHttp(String query) async {
+    final session = NotionWebSession.instance;
+    final recentPages = await RecentPagesService.getRecentPages();
+    final boosting = recentPages
+        .map((p) => <String, dynamic>{
+              'visitedAt': p.visitedAt.millisecondsSinceEpoch,
+              'pageId': p.pageId,
+            })
+        .toList();
+
+    final result = await session.search(query, boosting: boosting);
+    if (result['needsReauth'] == true) {
+      throw StateError('需要登录 Notion');
+    }
+    if (result['error'] != null) {
+      throw StateError(result['error'].toString());
+    }
+    final hits = (result['results'] as List? ?? const [])
+        .map((hit) => Map<String, dynamic>.from(hit as Map))
+        .toList();
+    final payload = {
+      'requestId':
+          'search-http-${DateTime.now().microsecondsSinceEpoch}-$_searchToken',
+      'status': result['status'],
+      'results': hits,
+    };
+    return jsonEncode(payload);
+  }
+
+  Future<String> loadRecentPagesViaHttp() async {
+    final session = NotionWebSession.instance;
+    final result = await session.loadRecentPages();
+    if (result['needsReauth'] == true) {
+      throw StateError('需要登录 Notion');
+    }
+    if (result['error'] != null) {
+      throw StateError(result['error'].toString());
+    }
+    final payload = {
+      'requestId':
+          'recents-http-${DateTime.now().microsecondsSinceEpoch}-$_searchToken',
+      'status': result['status'],
+      'results': result['results'] ?? const [],
+    };
+    return jsonEncode(payload);
+  }
 
   void start({String? seedPageId}) {
     cancelScheduledRelease();
@@ -200,7 +256,7 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
 
     final recentPages = await RecentPagesService.getRecentPages();
     final boosting = recentPages
-        .map((p) => {
+        .map((p) => <String, dynamic>{
               'visitedAt': p.visitedAt.millisecondsSinceEpoch,
               'pageId': p.pageId,
             })

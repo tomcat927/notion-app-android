@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../core/app_logger.dart';
 import '../../core/native_browser.dart';
 import '../../core/notion_client.dart';
+import '../../core/notion_web_session.dart';
 import '../browser/notion_page_browser_screen.dart';
 import 'private_search_bridge.dart';
 import 'private_search_models.dart';
@@ -49,8 +50,9 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
     WidgetsBinding.instance.addObserver(this);
     _bridge.addListener(_onBridgeChanged);
     _bridge.cancelScheduledRelease();
+    unawaited(NotionWebSession.instance.loadFromStorage());
     unawaited(_loadCachedRecentResults());
-    unawaited(_startBridge());
+    unawaited(_ensureHttpReadyAndLoad());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (_bridge.isReady && _searchController.text.trim().isEmpty) {
@@ -125,6 +127,27 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
     }
   }
 
+  Future<void> _ensureHttpReadyAndLoad() async {
+    final session = NotionWebSession.instance;
+    await session.loadFromStorage();
+    if (session.isReady) {
+      if (!mounted) return;
+      if (_searchController.text.trim().isEmpty && !_searching) {
+        unawaited(_loadRecentFromApi());
+      }
+      return;
+    }
+    final refreshed = await session.refreshFromCookieManager();
+    if (!mounted) return;
+    if (refreshed &&
+        _searchController.text.trim().isEmpty &&
+        !_searching) {
+      unawaited(_loadRecentFromApi());
+    } else if (!refreshed && !session.isReady) {
+      unawaited(_startBridge());
+    }
+  }
+
   Future<void> _loadCachedRecentResults() async {
     final cachedHits = await RecentPagesService.getCachedOfficialRecentHits();
     if (!mounted ||
@@ -164,7 +187,6 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
   }
 
   Future<void> _loadRecentFromApi() async {
-    if (!_bridge.isReady) return;
     _searchToken++;
     final token = _searchToken;
     final hasVisibleCache = _hits.isNotEmpty || _recentPages.isNotEmpty;
@@ -177,11 +199,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
       _error = null;
     });
     try {
-      final raw = await _bridge.loadRecentPages();
-      unawaited(AppLogger.log(
-        'PrivateSearch',
-        'loadRecentPages raw: ${raw.length > 2000 ? raw.substring(0, 2000) : raw}',
-      ));
+      final raw = await _bridge.loadRecentPagesViaHttp();
       final response = parsePrivateSearchResponse(raw);
       final hitSummary = response.hits
           .take(5)
@@ -189,7 +207,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
           .join(', ');
       unawaited(AppLogger.log(
         'PrivateSearch',
-        'loadRecentPages parsed: status=${response.status} '
+        'loadRecentPages(http) parsed: status=${response.status} '
         'error=${response.error} hits=${response.hits.length} '
         'first=$hitSummary',
       ));
@@ -200,12 +218,70 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
       }
       if (!mounted || token != _searchToken) return;
       setState(() {
-        if (response.error != null || response.status != 200 || response.hits.isEmpty) {
+        if (response.error != null ||
+            response.status != 200 ||
+            response.hits.isEmpty) {
           unawaited(AppLogger.log(
             'PrivateSearch',
-            'loadRecentPages fallback: error=${response.error} '
-            'status=${response.status} hitsEmpty=${response.hits.isEmpty}',
+            'loadRecentPages(http) fallback to webview: '
+            'error=${response.error} status=${response.status}',
           ));
+          unawaited(_loadRecentFromApiViaWebview());
+          return;
+        }
+        _showCachedRecentPages = false;
+        _usingCachedRecentHits = false;
+        _hits = response.hits;
+      });
+    } catch (error) {
+      if (!mounted || token != _searchToken) return;
+      unawaited(AppLogger.log(
+        'PrivateSearch',
+        'loadRecentPages(http) failed, fallback to webview: $error',
+      ));
+      unawaited(_loadRecentFromApiViaWebview());
+    } finally {
+      if (mounted && token == _searchToken) {
+        setState(() {
+          _searching = false;
+          _recentServerLoadFinished = true;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadRecentFromApiViaWebview() async {
+    _searchToken++;
+    final token = _searchToken;
+    setState(() {
+      _searching = true;
+      _recentServerLoadFinished = false;
+      _error = null;
+    });
+    try {
+      _bridge.cancelScheduledRelease();
+      if (!_bridge.hasController) {
+        await _startBridge();
+      }
+      final ready = await _bridge.waitUntilReady();
+      if (!mounted || token != _searchToken) return;
+      if (!ready) {
+        setState(() {
+          if (_hits.isEmpty) {
+            _showCachedRecentPages = true;
+            _usingCachedRecentHits = false;
+            unawaited(_loadRecentPages());
+          }
+        });
+        return;
+      }
+      final raw = await _bridge.loadRecentPages();
+      final response = parsePrivateSearchResponse(raw);
+      if (!mounted || token != _searchToken) return;
+      setState(() {
+        if (response.error != null ||
+            response.status != 200 ||
+            response.hits.isEmpty) {
           if (_hits.isEmpty) {
             _showCachedRecentPages = true;
             _usingCachedRecentHits = false;
@@ -226,7 +302,10 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
           unawaited(_loadRecentPages());
         }
       });
-      unawaited(AppLogger.log('PrivateSearch', 'loadRecentPages failed: $error'));
+      unawaited(AppLogger.log(
+        'PrivateSearch',
+        'loadRecentPages(webview) failed: $error',
+      ));
     } finally {
       if (mounted && token == _searchToken) {
         setState(() {
@@ -266,11 +345,40 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
     });
 
     try {
+      final raw = await _bridge.searchViaHttp(query);
+      final response = parsePrivateSearchResponse(raw);
+      if (!mounted || token != _searchToken) return;
+      setState(() {
+        if (response.error != null) {
+          _error = response.error;
+          _hits = [];
+        } else if (response.status != 200) {
+          _error = '搜索失败（HTTP ${response.status}）';
+          _hits = [];
+        } else {
+          _hits = response.hits;
+        }
+      });
+    } catch (error) {
+      if (!mounted || token != _searchToken) return;
+      unawaited(AppLogger.log(
+        'PrivateSearch',
+        'search(http) failed, fallback to webview: $error',
+      ));
+      await _searchViaWebview(query, token);
+    } finally {
+      if (mounted && token == _searchToken) {
+        setState(() => _searching = false);
+      }
+    }
+  }
+
+  Future<void> _searchViaWebview(String query, int token) async {
+    try {
       _bridge.cancelScheduledRelease();
       if (!_bridge.hasController) {
         await _startBridge();
       }
-
       final ready = await _bridge.waitUntilReady();
       if (!mounted || token != _searchToken) return;
       if (!ready) {
@@ -281,7 +389,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
         unawaited(
           AppLogger.log(
             'PrivateSearch',
-            'search aborted: bridge not ready after 12s status=${_bridge.status}',
+            'search(webview) aborted: not ready status=${_bridge.status}',
           ),
         );
         return;
@@ -308,11 +416,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
         _error = '搜索失败：$error';
         _hits = [];
       });
-      unawaited(AppLogger.log('PrivateSearch', 'search failed: $error'));
-    } finally {
-      if (mounted && token == _searchToken) {
-        setState(() => _searching = false);
-      }
+      unawaited(AppLogger.log('PrivateSearch', 'search(webview) failed: $error'));
     }
   }
 
@@ -554,14 +658,18 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
                     ),
                   ),
                 ),
-                if (!_bridge.isReady && !_hasVisibleRecentResults)
+                if (!_bridge.isHttpReady &&
+                    !_bridge.isReady &&
+                    !_hasVisibleRecentResults)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Card(
                       child: ListTile(
                         leading: const Icon(Icons.person_search),
                         title: const Text('Notion 网页会话'),
-                        subtitle: Text(_bridge.status),
+                        subtitle: Text(_bridge.isHttpReady
+                            ? '已通过 cookie 连接，正在加载…'
+                            : _bridge.status),
                         trailing: _bridge.url == null
                             ? null
                             : IconButton(

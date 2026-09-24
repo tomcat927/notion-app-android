@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.webkit.CookieManager
 import android.webkit.WebView
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
@@ -72,6 +73,14 @@ class MainActivity : FlutterActivity() {
                         call.argument<Boolean>("showElementInspector"),
                         result,
                     )
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.notion.app/cookie")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getCookies" -> result.success(getCookies(call.argument<String>("url")))
                     else -> result.notImplemented()
                 }
             }
@@ -210,6 +219,32 @@ class MainActivity : FlutterActivity() {
             if (file.exists()) file.delete()
         } catch (ignored: Exception) {
             // Best-effort cleanup.
+        }
+    }
+
+    private fun getCookies(url: String?): Map<String, String> {
+        if (url.isNullOrBlank()) {
+            return emptyMap()
+        }
+
+        return try {
+            val cookieManager = CookieManager.getInstance()
+            val rawCookieHeader = cookieManager.getCookie(url) ?: ""
+            val cookies = mutableMapOf<String, String>()
+            for (pair in rawCookieHeader.split(";")) {
+                val trimmed = pair.trim()
+                if (trimmed.isEmpty()) continue
+                val eqIndex = trimmed.indexOf("=")
+                if (eqIndex <= 0) continue
+                val name = trimmed.substring(0, eqIndex).trim()
+                val value = trimmed.substring(eqIndex + 1).trim()
+                if (name.isNotEmpty() && value.isNotEmpty()) {
+                    cookies[name] = value
+                }
+            }
+            cookies
+        } catch (error: Exception) {
+            emptyMap()
         }
     }
 

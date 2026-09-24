@@ -11,6 +11,7 @@ import '../../core/notion_client.dart';
 import '../../core/app_logger.dart';
 import '../../core/cache_cleanup_service.dart';
 import '../../core/native_browser.dart';
+import '../../core/notion_web_session.dart';
 import '../../core/remote_log_service.dart';
 import '../../core/update_service.dart';
 import '../auth/login_screen.dart';
@@ -140,6 +141,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_loadBrowserPreferences());
     unawaited(_loadMonthGroupPreference());
     unawaited(_loadRemoteLogConfig());
+    unawaited(_prewarmWebSession());
+  }
+
+  Future<void> _prewarmWebSession() async {
+    final session = NotionWebSession.instance;
+    await session.loadFromStorage();
+    if (!session.isReady) {
+      unawaited(session.refreshFromCookieManager());
+    }
   }
 
   Future<void> _loadRemoteLogConfig() async {
