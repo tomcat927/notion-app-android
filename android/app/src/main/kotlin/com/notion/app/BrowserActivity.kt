@@ -14,6 +14,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.ConsoleMessage
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -304,6 +305,20 @@ class BrowserActivity : Activity() {
             }
         }
 
+        override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+            when (consoleMessage.messageLevel()) {
+                ConsoleMessage.MessageLevel.ERROR -> writeBrowserLog(
+                    "js error: ${consoleMessage.message()} " +
+                        "(${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})",
+                )
+                ConsoleMessage.MessageLevel.WARNING -> writeBrowserLog(
+                    "js warn: ${consoleMessage.message()}",
+                )
+                else -> Unit
+            }
+            return true
+        }
+
         override fun onShowFileChooser(
             webView: WebView,
             filePathCallback: ValueCallback<Array<Uri>>,
@@ -512,6 +527,10 @@ class BrowserActivity : Activity() {
     private fun writeBrowserLog(message: String) {
         try {
             val file = File(filesDir, "notion_app_native_crash.log")
+            if (file.length() > MAX_BROWSER_LOG_BYTES) {
+                val content = file.readText()
+                file.writeText(content.substring(content.length / 2))
+            }
             val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())
             file.appendText("[$timestamp] [BrowserWebView]\n$message\n\n")
         } catch (ignored: Exception) {
@@ -527,6 +546,7 @@ class BrowserActivity : Activity() {
         const val EXTRA_OPEN_EXTERNAL_LINKS_IN_APP = "openExternalLinksInApp"
         const val EXTRA_SHOW_ELEMENT_INSPECTOR = "showElementInspector"
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
+        private const val MAX_BROWSER_LOG_BYTES = 256 * 1024
         private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/141.0.0.0 Mobile Safari/537.36"
@@ -563,10 +583,22 @@ class BrowserActivity : Activity() {
       };
     });
 
+  let lastCount = -1;
+  let scheduled = false;
   const updateVisibility = () => {
+    scheduled = false;
+    const count = document.querySelectorAll('h1, h2, h3').length;
+    if (count === lastCount) return;
+    lastCount = count;
+    collect();
     if (window.NotionOutline) {
-      window.NotionOutline.setVisible(collect().length > 0);
+      window.NotionOutline.setVisible(count > 0);
     }
+  };
+  const scheduleUpdate = () => {
+    if (scheduled) return;
+    scheduled = true;
+    setTimeout(updateVisibility, 300);
   };
 
   window.__notionShowOutline = () => {
@@ -607,8 +639,8 @@ class BrowserActivity : Activity() {
 
   updateVisibility();
   if (window.__notionOutlineObserver) window.__notionOutlineObserver.disconnect();
-  window.__notionOutlineObserver = new MutationObserver(updateVisibility);
-  window.__notionOutlineObserver.observe(document.body, {childList:true, subtree:true, characterData:true});
+  window.__notionOutlineObserver = new MutationObserver(scheduleUpdate);
+  window.__notionOutlineObserver.observe(document.body, {childList:true, subtree:true});
 })();
 """
 
