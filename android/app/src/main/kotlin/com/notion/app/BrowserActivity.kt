@@ -285,7 +285,7 @@ class BrowserActivity : Activity() {
             if (canAutoRecoverRenderer()) {
                 writeBrowserLog("renderer auto-recover: attempt=$rendererGoneCount")
                 recreateWebView()
-                Toast.makeText(this, "页面已自动恢复", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@BrowserActivity, "页面已自动恢复", Toast.LENGTH_SHORT).show()
             } else {
                 showRendererGoneView(didCrash)
             }
