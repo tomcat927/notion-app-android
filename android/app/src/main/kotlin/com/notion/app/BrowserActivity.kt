@@ -10,6 +10,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -45,6 +46,8 @@ class BrowserActivity : Activity() {
     private var openExternalLinksInApp: Boolean = false
     private var showElementInspectorToolbar: Boolean = false
     private var elementInspectorActive: Boolean = false
+    private val rendererGoneTimestamps = mutableListOf<Long>()
+    private var rendererGoneCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -279,9 +282,30 @@ class BrowserActivity : Activity() {
             }
             writeBrowserLog("WebView renderer gone: didCrash=$didCrash priorityAtExit=${rendererPriority(detail)}")
             destroyWebView(clearPage = false)
-            showRendererGoneView(didCrash)
+            if (canAutoRecoverRenderer()) {
+                writeBrowserLog("renderer auto-recover: attempt=$rendererGoneCount")
+                recreateWebView()
+                Toast.makeText(this, "页面已自动恢复", Toast.LENGTH_SHORT).show()
+            } else {
+                showRendererGoneView(didCrash)
+            }
             return true
         }
+    }
+
+    private fun canAutoRecoverRenderer(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        rendererGoneTimestamps.removeAll { now - it > AUTO_RECOVER_WINDOW_MS }
+        rendererGoneCount = rendererGoneTimestamps.size
+        return rendererGoneCount < MAX_AUTO_RECOVERS
+    }
+
+    private fun recreateWebView() {
+        elementInspectorActive = false
+        rendererGoneTimestamps.add(SystemClock.elapsedRealtime())
+        rendererGoneCount = rendererGoneTimestamps.size
+        createWebView()
+        loadInitialPage()
     }
 
     private fun showOutline() {
@@ -547,6 +571,8 @@ class BrowserActivity : Activity() {
         const val EXTRA_SHOW_ELEMENT_INSPECTOR = "showElementInspector"
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
         private const val MAX_BROWSER_LOG_BYTES = 256 * 1024
+        private const val MAX_AUTO_RECOVERS = 1
+        private const val AUTO_RECOVER_WINDOW_MS = 5 * 60 * 1000L
         private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/141.0.0.0 Mobile Safari/537.36"
