@@ -11,6 +11,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -51,7 +53,12 @@ class BrowserActivity : Activity() {
     private var highlightBlockId: String = ""
     private var highlightSnippet: String = ""
    private val rendererGoneTimestamps = mutableListOf<Long>()
-    private var rendererGoneCount = 0
+   private var rendererGoneCount = 0
+    private val idleReleaseHandler = Handler(Looper.getMainLooper())
+    private val idleReleaseRunnable = Runnable {
+        writeBrowserLog("idle release timeout, finishing activity")
+        finish()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +75,7 @@ class BrowserActivity : Activity() {
     }
 
     override fun onDestroy() {
+        idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
         elementInspectorActive = false
@@ -82,7 +90,44 @@ class BrowserActivity : Activity() {
             currentWebView.goBack()
             return
         }
-        super.onBackPressed()
+        moveTaskToBack(true)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
+        val newPageId = intent.getStringExtra(EXTRA_PAGE_ID)?.orEmpty()?.trim()?.replace("-", "")
+        if (newPageId.isNullOrEmpty()) return
+        highlightBlockId = intent.getStringExtra(EXTRA_BLOCK_ID).orEmpty()
+        highlightSnippet = intent.getStringExtra(EXTRA_SNIPPET).orEmpty()
+        val newTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty()
+        if (newTitle.isNotBlank()) {
+            titleView.text = newTitle
+            title = newTitle
+        }
+        showElementInspectorToolbar = intent.getBooleanExtra(EXTRA_SHOW_ELEMENT_INSPECTOR, false)
+        val currentWebView = webView
+        if (currentWebView != null) {
+            val url = "https://www.notion.so/$newPageId"
+            writeBrowserLog("reuse webview: pageId=$newPageId title=$newTitle blockId=$highlightBlockId")
+            currentWebView.loadUrl(url)
+        } else {
+            writeBrowserLog("webview null, recreating: $newPageId")
+            createWebView()
+            loadInitialPage()
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
+        idleReleaseHandler.postDelayed(idleReleaseRunnable, IDLE_RELEASE_DELAY_MS)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
     }
 
     @Deprecated("Deprecated in Java")
@@ -685,7 +730,8 @@ class BrowserActivity : Activity() {
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
         private const val MAX_BROWSER_LOG_BYTES = 256 * 1024
         private const val MAX_AUTO_RECOVERS = 1
-        private const val AUTO_RECOVER_WINDOW_MS = 5 * 60 * 1000L
+       private const val AUTO_RECOVER_WINDOW_MS = 5 * 60 * 1000L
+        private const val IDLE_RELEASE_DELAY_MS = 5 * 60 * 1000L
         private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/141.0.0.0 Mobile Safari/537.36"
