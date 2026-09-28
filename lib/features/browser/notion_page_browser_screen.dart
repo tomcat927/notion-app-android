@@ -66,9 +66,8 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
 
   // 页面内搜索状态
   final TextEditingController _inPageSearchController = TextEditingController();
-  List<InPageSearchMatch> _inPageMatches = [];
-  int _currentMatchIndex = -1;
-  bool _inPageSearching = false;
+ List<InPageSearchMatch> _inPageMatches = [];
+ bool _inPageSearching = false;
   Timer? _inPageSearchDebounce;
   Completer<String>? _inPageSearchCompleter;
 
@@ -1116,9 +1115,8 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
 
   Future<void> _scrollToMatch(int index) async {
     try {
-      await _controller.runJavaScript(buildScrollToMatchScript(index));
-      _currentMatchIndex = index;
-    } catch (error) {
+     await _controller.runJavaScript(buildScrollToMatchScript(index));
+   } catch (error) {
       await AppLogger.log('Browser', 'scroll to match failed: $error');
     }
   }
