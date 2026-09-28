@@ -952,7 +952,8 @@ class BrowserActivity : Activity() {
     var lowerQuery = query.toLowerCase();
     var maxResults = 100;
 
-    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    var searchRoot = document.querySelector('.notion-page-content') || document.body;
+    var walker = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT, {
       acceptNode: function(node) {
         var parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
@@ -965,6 +966,7 @@ class BrowserActivity : Activity() {
       }
     });
 
+    var lastContext = '';
     while (walker.nextNode() && ranges.length < maxResults) {
       var text = walker.currentNode.textContent;
       var lowerText = text.toLowerCase();
@@ -976,6 +978,9 @@ class BrowserActivity : Activity() {
         var prefix = contextStart > 0 ? '\u2026' : '';
         var suffix = contextEnd < text.length ? '\u2026' : '';
         var context = prefix + text.substring(contextStart, contextEnd) + suffix;
+
+        if (context === lastContext) { pos += query.length; continue; }
+        lastContext = context;
 
         var range = document.createRange();
         range.setStart(walker.currentNode, pos);
