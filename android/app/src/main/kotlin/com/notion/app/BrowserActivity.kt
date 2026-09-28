@@ -22,6 +22,7 @@ import android.webkit.WebChromeClient
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -32,6 +33,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
+import java.io.ByteArrayInputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -270,7 +272,19 @@ class BrowserActivity : Activity() {
 
         @Deprecated("Deprecated in Java")
         override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-            return shouldOverrideNavigation(Uri.parse(url))
+           return shouldOverrideNavigation(Uri.parse(url))
+       }
+
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            val url = request.url?.toString() ?: return null
+            if (url.contains("api.amplitude.com") ||
+                url.contains("api.statsig.com") ||
+                url.contains("featuregates.org") ||
+                url.contains("prod.web-sdk.amplitude.com")
+            ) {
+                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+            }
+            return null
         }
 
        override fun onPageFinished(view: WebView, url: String) {
@@ -974,8 +988,8 @@ class BrowserActivity : Activity() {
         item.onmouseover = function() { this.style.backgroundColor = '#f9fafb'; };
         item.onmouseout = function() { this.style.backgroundColor = ''; };
 
-        var rangeIndex = ranges.length - 1;
-        item.onclick = function() { scrollToMatch(rangeIndex); };
+    let rangeIndex = ranges.length - 1;
+    item.onclick = function() { scrollToMatch(rangeIndex); };
 
         resultsList.appendChild(item);
         pos += query.length;
