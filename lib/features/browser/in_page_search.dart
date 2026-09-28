@@ -84,7 +84,7 @@ const String kHighlightStyleScript = r'''
     '  border-radius: 4px;',
     '}',
     '.notion-search-overlay {',
-    '  position: absolute;',
+    '  position: fixed;',
     '  background: rgba(255, 213, 79, 0.5);',
     '  border: 2px solid rgba(255, 193, 7, 0.8);',
     '  border-radius: 3px;',
@@ -131,31 +131,38 @@ String buildHighlightBlockScript({
     }
   }
 
-  if (blockId) {
-    var block = document.querySelector('[data-block-id="' + blockId + '"]');
-    if (block) {
-      expandToggles(block);
-      setTimeout(function() { highlightElement(block); }, 150);
-      return;
-    }
-  }
-
-  if (snippet && snippet.length > 2) {
-    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode: function(node) {
-        var parent = node.parentElement;
-        if (!parent) return NodeFilter.FILTER_REJECT;
-        var tag = parent.tagName;
-        if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
-        if (node.textContent.indexOf(snippet) < 0) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
+  var attempts = 0;
+  function tryHighlight() {
+    attempts++;
+    if (blockId) {
+      var block = document.querySelector('[data-block-id="' + blockId + '"]');
+      if (block) {
+        expandToggles(block);
+        setTimeout(function() { highlightElement(block); }, 150);
+        return;
       }
-    });
-    while (walker.nextNode()) {
-      highlightElement(walker.currentNode.parentElement);
-      return;
+    }
+    if (snippet && snippet.length > 2) {
+      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: function(node) {
+          var parent = node.parentElement;
+          if (!parent) return NodeFilter.FILTER_REJECT;
+          var tag = parent.tagName;
+          if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+          if (node.textContent.indexOf(snippet) < 0) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      while (walker.nextNode()) {
+        highlightElement(walker.currentNode.parentElement);
+        return;
+      }
+    }
+    if (attempts < 12) {
+      setTimeout(tryHighlight, 500);
     }
   }
+  tryHighlight();
 })();
 ''';
 }
@@ -249,10 +256,13 @@ String buildScrollToMatchScript(int matchIndex) {
   var range = ranges[$matchIndex];
   if (!range) return;
 
-  var rect = range.getBoundingClientRect();
-  var targetY = rect.top + window.scrollY - window.innerHeight / 3;
-  if (targetY < 0) targetY = 0;
-  window.scrollTo({ top: targetY, behavior: 'smooth' });
+  var el = range.startContainer;
+  if (el.nodeType === Node.TEXT_NODE) {
+    el = el.parentElement;
+  }
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 
   var existing = document.querySelectorAll('.notion-search-overlay');
   existing.forEach(function(el) { el.remove(); });
@@ -261,8 +271,9 @@ String buildScrollToMatchScript(int matchIndex) {
     var newRect = range.getBoundingClientRect();
     var overlay = document.createElement('div');
     overlay.className = 'notion-search-overlay';
-    overlay.style.left = (newRect.left + window.scrollX) + 'px';
-    overlay.style.top = (newRect.top + window.scrollY) + 'px';
+    overlay.style.position = 'fixed';
+    overlay.style.left = newRect.left + 'px';
+    overlay.style.top = newRect.top + 'px';
     overlay.style.width = newRect.width + 'px';
     overlay.style.height = Math.max(newRect.height, 4) + 'px';
     document.body.appendChild(overlay);
