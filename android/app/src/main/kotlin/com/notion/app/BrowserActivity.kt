@@ -45,17 +45,21 @@ class BrowserActivity : Activity() {
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var openExternalLinksInApp: Boolean = false
     private var showElementInspectorToolbar: Boolean = false
-    private var elementInspectorActive: Boolean = false
-    private val rendererGoneTimestamps = mutableListOf<Long>()
+   private var elementInspectorActive: Boolean = false
+    private var highlightBlockId: String = ""
+    private var highlightSnippet: String = ""
+   private val rendererGoneTimestamps = mutableListOf<Long>()
     private var rendererGoneCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         openExternalLinksInApp =
             intent.getBooleanExtra(EXTRA_OPEN_EXTERNAL_LINKS_IN_APP, false)
-        showElementInspectorToolbar =
-            intent.getBooleanExtra(EXTRA_SHOW_ELEMENT_INSPECTOR, false)
-        title = intent.getStringExtra(EXTRA_TITLE).takeUnless { it.isNullOrBlank() } ?: "Notion"
+       showElementInspectorToolbar =
+           intent.getBooleanExtra(EXTRA_SHOW_ELEMENT_INSPECTOR, false)
+        highlightBlockId = intent.getStringExtra(EXTRA_BLOCK_ID).orEmpty()
+        highlightSnippet = intent.getStringExtra(EXTRA_SNIPPET).orEmpty()
+       title = intent.getStringExtra(EXTRA_TITLE).takeUnless { it.isNullOrBlank() } ?: "Notion"
         setContentView(createContentView())
         createWebView()
         loadInitialPage()
@@ -133,7 +137,20 @@ class BrowserActivity : Activity() {
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ),
             )
-        }
+       }
+
+        toolbar.addView(
+            Button(this).apply {
+                text = "搜索"
+                textSize = 13f
+                isAllCaps = false
+                setOnClickListener { showInPageSearch() }
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
 
         titleView = TextView(this).apply {
             text = title
@@ -232,9 +249,10 @@ class BrowserActivity : Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             userAgentString = MOBILE_USER_AGENT
         }
-        view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
-        view.addJavascriptInterface(OutlineBridge(), "NotionOutline")
-        CookieManager.getInstance().setAcceptCookie(true)
+       view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
+       view.addJavascriptInterface(OutlineBridge(), "NotionOutline")
+        view.addJavascriptInterface(InPageSearchBridge(), "NotionInPageSearchNative")
+       CookieManager.getInstance().setAcceptCookie(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
         }
@@ -255,11 +273,15 @@ class BrowserActivity : Activity() {
             return shouldOverrideNavigation(Uri.parse(url))
         }
 
-        override fun onPageFinished(view: WebView, url: String) {
-            titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
-            view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
-            view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
-            if (elementInspectorActive) {
+       override fun onPageFinished(view: WebView, url: String) {
+           titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
+           view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
+           view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
+            view.evaluateJavascript(HIGHLIGHT_STYLE_SCRIPT, null)
+            if (highlightBlockId.isNotEmpty()) {
+                view.evaluateJavascript(buildHighlightBlockScript(), null)
+            }
+           if (elementInspectorActive) {
                 installElementInspector()
             }
         }
@@ -308,14 +330,82 @@ class BrowserActivity : Activity() {
         loadInitialPage()
     }
 
-    private fun showOutline() {
-        webView?.evaluateJavascript("window.__notionShowOutline && window.__notionShowOutline();", null)
+   private fun showOutline() {
+       webView?.evaluateJavascript("window.__notionShowOutline && window.__notionShowOutline();", null)
+   }
+
+    private fun showInPageSearch() {
+        webView?.evaluateJavascript(INSTALL_IN_PAGE_SEARCH_SCRIPT, null)
+    }
+
+    private fun buildHighlightBlockScript(): String {
+        val blockId = highlightBlockId.replace("\\", "\\\\").replace("\"", "\\\"")
+        val snippet = highlightSnippet.replace("\\", "\\\\").replace("\"", "\\\"")
+        return """
+(function() {
+  var blockId = "$blockId";
+  var snippet = "$snippet";
+
+  function highlightElement(el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('notion-search-highlight-pulse');
+    setTimeout(function() {
+      el.classList.remove('notion-search-highlight-pulse');
+    }, 3000);
+  }
+
+  function expandToggles(block) {
+    var toggle = block.closest('.notion-toggle-block');
+    if (!toggle) return;
+    var btn = toggle.querySelector('.notion-toggle');
+    if (btn) {
+      var children = toggle.querySelector('.notion-toggle-block__children');
+      if (children && children.offsetParent === null) {
+        btn.click();
+      }
+    }
+  }
+
+  if (blockId) {
+    var block = document.querySelector('[data-block-id="' + blockId + '"]');
+    if (block) {
+      expandToggles(block);
+      setTimeout(function() { highlightElement(block); }, 150);
+      return;
+    }
+  }
+
+  if (snippet && snippet.length > 2) {
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: function(node) {
+        var parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        var tag = parent.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+        if (node.textContent.indexOf(snippet) < 0) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    while (walker.nextNode()) {
+      highlightElement(walker.currentNode.parentElement);
+      return;
+    }
+  }
+})();
+        """.trimIndent()
     }
 
     private inner class OutlineBridge {
         @JavascriptInterface
         fun setVisible(visible: Boolean) {
             runOnUiThread { outlineButton.visibility = if (visible) View.VISIBLE else View.GONE }
+        }
+    }
+
+    private inner class InPageSearchBridge {
+        @JavascriptInterface
+        fun log(message: String) {
+            writeBrowserLog("in-page search: $message")
         }
     }
 
@@ -568,7 +658,9 @@ class BrowserActivity : Activity() {
         const val EXTRA_PAGE_ID = "pageId"
         const val EXTRA_TITLE = "title"
         const val EXTRA_OPEN_EXTERNAL_LINKS_IN_APP = "openExternalLinksInApp"
-        const val EXTRA_SHOW_ELEMENT_INSPECTOR = "showElementInspector"
+       const val EXTRA_SHOW_ELEMENT_INSPECTOR = "showElementInspector"
+        const val EXTRA_BLOCK_ID = "blockId"
+        const val EXTRA_SNIPPET = "snippet"
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
         private const val MAX_BROWSER_LOG_BYTES = 256 * 1024
         private const val MAX_AUTO_RECOVERS = 1
@@ -756,7 +848,187 @@ class BrowserActivity : Activity() {
     document.removeEventListener('click', handler, true);
     window.__notionElementInspectorCleanup = null;
   };
-  document.addEventListener('click', handler, true);
+ document.addEventListener('click', handler, true);
+})();
+"""
+        private const val HIGHLIGHT_STYLE_SCRIPT = """
+(function() {
+  if (document.getElementById('notion-search-highlight-style')) return;
+  var style = document.createElement('style');
+  style.id = 'notion-search-highlight-style';
+  style.textContent = [
+    '@keyframes notion-highlight-pulse {',
+    '  0% { background-color: rgba(255, 213, 79, 0.8); }',
+    '  30% { background-color: rgba(255, 213, 79, 0.45); }',
+    '  100% { background-color: transparent; }',
+    '}',
+    '.notion-search-highlight-pulse {',
+    '  animation: notion-highlight-pulse 3s ease-out forwards;',
+    '  border-radius: 4px;',
+    '}',
+    '.notion-search-overlay {',
+    '  position: absolute;',
+    '  background: rgba(255, 213, 79, 0.5);',
+    '  border: 2px solid rgba(255, 193, 7, 0.8);',
+    '  border-radius: 3px;',
+    '  pointer-events: none;',
+    '  z-index: 99999;',
+    '  transition: opacity 0.4s ease-out;',
+    '}'
+  ].join('\n');
+  document.head.appendChild(style);
+})();
+"""
+
+        private const val INSTALL_IN_PAGE_SEARCH_SCRIPT = """
+(function() {
+  var existing = document.getElementById('notion-in-page-search-panel');
+  if (existing) { existing.remove(); return; }
+
+  var panel = document.createElement('div');
+  panel.id = 'notion-in-page-search-panel';
+  panel.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:60vh;z-index:2147483647;background:#fff;color:#111827;border-radius:16px 16px 0 0;box-shadow:0 -4px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;font-family:sans-serif;';
+
+  var header = document.createElement('div');
+  header.style.cssText = 'padding:12px 16px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:8px;';
+
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = '在当前页面搜索';
+  input.style.cssText = 'flex:1;border:1px solid #d1d5db;border-radius:8px;padding:8px 12px;font-size:15px;outline:none;';
+
+  var closeBtn = document.createElement('button');
+  closeBtn.textContent = 'X';
+  closeBtn.style.cssText = 'border:0;background:transparent;font-size:18px;color:#6b7280;padding:4px 8px;cursor:pointer;';
+  closeBtn.onclick = function() { panel.remove(); };
+
+  header.appendChild(input);
+  header.appendChild(closeBtn);
+  panel.appendChild(header);
+
+  var resultsList = document.createElement('div');
+  resultsList.style.cssText = 'flex:1;overflow:auto;padding:4px 0;max-height:40vh;';
+  panel.appendChild(resultsList);
+
+  var countLabel = document.createElement('div');
+  countLabel.style.cssText = 'padding:8px 16px;border-top:1px solid #e5e7eb;font-size:13px;color:#6b7280;';
+  panel.appendChild(countLabel);
+
+  document.body.appendChild(panel);
+  input.focus();
+
+  var ranges = [];
+
+  function clearResults() {
+    ranges = [];
+    resultsList.innerHTML = '';
+    countLabel.textContent = '';
+  }
+
+  function performSearch(query) {
+    clearResults();
+    if (!query || query.length < 1) return;
+    var lowerQuery = query.toLowerCase();
+    var maxResults = 100;
+
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: function(node) {
+        var parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        var tag = parent.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+        var text = node.textContent;
+        if (!text || text.trim().length < 1) return NodeFilter.FILTER_REJECT;
+        if (text.toLowerCase().indexOf(lowerQuery) < 0) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+
+    while (walker.nextNode() && ranges.length < maxResults) {
+      var text = walker.currentNode.textContent;
+      var lowerText = text.toLowerCase();
+      var pos = 0;
+      while ((pos = lowerText.indexOf(lowerQuery, pos)) >= 0) {
+        if (ranges.length >= maxResults) break;
+        var contextStart = Math.max(0, pos - 40);
+        var contextEnd = Math.min(text.length, pos + query.length + 40);
+        var prefix = contextStart > 0 ? '\u2026' : '';
+        var suffix = contextEnd < text.length ? '\u2026' : '';
+        var context = prefix + text.substring(contextStart, contextEnd) + suffix;
+
+        var range = document.createRange();
+        range.setStart(walker.currentNode, pos);
+        range.setEnd(walker.currentNode, pos + query.length);
+        ranges.push(range);
+
+        var item = document.createElement('div');
+        item.style.cssText = 'padding:10px 16px;cursor:pointer;border-bottom:1px solid #f3f4f6;font-size:14px;line-height:1.4;word-break:break-all;';
+        item.textContent = context;
+        item.onmouseover = function() { this.style.backgroundColor = '#f9fafb'; };
+        item.onmouseout = function() { this.style.backgroundColor = ''; };
+
+        var rangeIndex = ranges.length - 1;
+        item.onclick = function() { scrollToMatch(rangeIndex); };
+
+        resultsList.appendChild(item);
+        pos += query.length;
+      }
+    }
+    countLabel.textContent = ranges.length + ' 个结果';
+  }
+
+  function scrollToMatch(index) {
+    var range = ranges[index];
+    if (!range) return;
+    var rect = range.getBoundingClientRect();
+    var targetY = rect.top + window.scrollY - window.innerHeight / 3;
+    if (targetY < 0) targetY = 0;
+    window.scrollTo({ top: targetY, behavior: 'smooth' });
+
+    var overlays = document.querySelectorAll('.notion-search-overlay');
+    for (var i = 0; i < overlays.length; i++) { overlays[i].remove(); }
+
+    setTimeout(function() {
+      var newRect = range.getBoundingClientRect();
+      var overlay = document.createElement('div');
+      overlay.className = 'notion-search-overlay';
+      overlay.style.cssText =
+        'position:absolute;' +
+        'left:' + (newRect.left + window.scrollX) + 'px;' +
+        'top:' + (newRect.top + window.scrollY) + 'px;' +
+        'width:' + newRect.width + 'px;' +
+        'height:' + Math.max(newRect.height, 4) + 'px;' +
+        'background:rgba(255,213,79,0.5);' +
+        'border:2px solid rgba(255,193,7,0.8);' +
+        'border-radius:3px;' +
+        'pointer-events:none;' +
+        'z-index:99999;' +
+        'transition:opacity 0.4s ease-out;';
+      document.body.appendChild(overlay);
+      setTimeout(function() {
+        overlay.style.opacity = '0';
+        setTimeout(function() { overlay.remove(); }, 500);
+      }, 2000);
+    }, 400);
+  }
+
+  var debounceTimer;
+  input.oninput = function() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(function() {
+      performSearch(input.value);
+    }, 400);
+  };
+
+  input.onkeydown = function(e) {
+    if (e.key === 'Enter') {
+      clearTimeout(debounceTimer);
+      performSearch(input.value);
+    }
+    if (e.key === 'Escape') {
+      panel.remove();
+    }
+  };
 })();
 """
     }

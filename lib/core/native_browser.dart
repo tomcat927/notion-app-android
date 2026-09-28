@@ -30,22 +30,26 @@ class NativeBrowser {
     await prefs.setBool(showElementInspectorPreferenceKey, value);
   }
 
-  static Future<bool> openPage({
-    required String pageId,
-    required String title,
-  }) async {
-    if (!Platform.isAndroid) return false;
+ static Future<bool> openPage({
+   required String pageId,
+   required String title,
+    String? blockId,
+    String? snippet,
+ }) async {
+   if (!Platform.isAndroid) return false;
 
-    try {
-      final openExternalInApp = await openExternalLinksInApp();
-      final showInspector = await showElementInspector();
-      final opened = await _channel.invokeMethod<bool>('openPage', {
-        'pageId': pageId,
-        'title': title,
-        'openExternalLinksInApp': openExternalInApp,
-        'showElementInspector': showInspector,
-      });
-      return opened == true;
+   try {
+     final openExternalInApp = await openExternalLinksInApp();
+     final showInspector = await showElementInspector();
+     final opened = await _channel.invokeMethod<bool>('openPage', {
+       'pageId': pageId,
+       'title': title,
+       'openExternalLinksInApp': openExternalInApp,
+       'showElementInspector': showInspector,
+        'blockId': blockId ?? '',
+        'snippet': snippet ?? '',
+     });
+     return opened == true;
     } catch (_) {
       return false;
     }

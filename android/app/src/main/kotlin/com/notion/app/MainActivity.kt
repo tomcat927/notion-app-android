@@ -66,13 +66,15 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.notion.app/browser")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "openPage" -> openPageBrowser(
-                        call.argument<String>("pageId"),
-                        call.argument<String>("title"),
-                        call.argument<Boolean>("openExternalLinksInApp"),
-                        call.argument<Boolean>("showElementInspector"),
-                        result,
-                    )
+                   "openPage" -> openPageBrowser(
+                       call.argument<String>("pageId"),
+                       call.argument<String>("title"),
+                       call.argument<Boolean>("openExternalLinksInApp"),
+                       call.argument<Boolean>("showElementInspector"),
+                        call.argument<String>("blockId"),
+                        call.argument<String>("snippet"),
+                       result,
+                   )
                     else -> result.notImplemented()
                 }
             }
@@ -298,13 +300,15 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun openPageBrowser(
-        pageId: String?,
-        title: String?,
-        openExternalLinksInApp: Boolean?,
-        showElementInspector: Boolean?,
-        result: MethodChannel.Result,
-    ) {
+   private fun openPageBrowser(
+       pageId: String?,
+       title: String?,
+       openExternalLinksInApp: Boolean?,
+       showElementInspector: Boolean?,
+        blockId: String?,
+        snippet: String?,
+       result: MethodChannel.Result,
+   ) {
         if (pageId.isNullOrBlank()) {
             result.error("invalid_argument", "缺少页面 ID", null)
             return
@@ -318,10 +322,12 @@ class MainActivity : FlutterActivity() {
                     BrowserActivity.EXTRA_OPEN_EXTERNAL_LINKS_IN_APP,
                     openExternalLinksInApp == true,
                 )
-                putExtra(
-                    BrowserActivity.EXTRA_SHOW_ELEMENT_INSPECTOR,
-                    showElementInspector == true,
-                )
+               putExtra(
+                   BrowserActivity.EXTRA_SHOW_ELEMENT_INSPECTOR,
+                   showElementInspector == true,
+               )
+                putExtra(BrowserActivity.EXTRA_BLOCK_ID, blockId.orEmpty())
+                putExtra(BrowserActivity.EXTRA_SNIPPET, snippet.orEmpty())
             }
             startActivity(intent)
             result.success(true)

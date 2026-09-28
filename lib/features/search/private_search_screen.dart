@@ -573,25 +573,42 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
   }
 
   Future<void> _openHit(PrivateSearchHit hit) async {
-    await _openPage(hit.pageId, hit.title);
+    await _openPage(
+      hit.pageId,
+      hit.title,
+      blockId: hit.primaryBlockId,
+      snippet: hit.primarySnippet,
+    );
   }
 
   Future<void> _openRecentPage(RecentPage page) async {
     await _openPage(page.pageId, page.title);
   }
 
-  Future<void> _openPage(String pageId, String title) async {
+  Future<void> _openPage(
+    String pageId,
+    String title, {
+    String? blockId,
+    String? snippet,
+  }) async {
     unawaited(RecentPagesService.addRecentPage(pageId, title));
     await AppLogger.log('PrivateSearch', '打开笔记前释放隐藏搜索 WebView: $pageId');
     _bridge.reset();
     if (!mounted) return;
-    final opened = await NativeBrowser.openPage(pageId: pageId, title: title);
+    final opened = await NativeBrowser.openPage(
+      pageId: pageId,
+      title: title,
+      blockId: blockId,
+      snippet: snippet,
+    );
     if (opened || !mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => NotionPageBrowserScreen(
           pageId: pageId,
           title: title,
+          highlightBlockId: blockId,
+          highlightSnippet: snippet,
         ),
       ),
     );

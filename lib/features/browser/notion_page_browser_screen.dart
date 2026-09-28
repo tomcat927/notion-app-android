@@ -15,15 +15,21 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../../core/app_logger.dart';
 import '../../core/native_browser.dart';
 
+import 'in_page_search.dart';
+
 class NotionPageBrowserScreen extends StatefulWidget {
   const NotionPageBrowserScreen({
     super.key,
     required this.pageId,
     required this.title,
+    this.highlightBlockId,
+    this.highlightSnippet,
   });
 
   final String pageId;
   final String title;
+  final String? highlightBlockId;
+  final String? highlightSnippet;
 
   static String pageUrl(String pageId) {
     final compactId = pageId.trim().replaceAll('-', '');
@@ -56,7 +62,15 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   Completer<String>? _privateSearchCompleter;
   bool _openExternalLinksInApp = false;
   bool _showElementInspector = false;
-  bool _elementInspectorActive = false;
+ bool _elementInspectorActive = false;
+
+  // 页面内搜索状态
+  final TextEditingController _inPageSearchController = TextEditingController();
+  List<InPageSearchMatch> _inPageMatches = [];
+  int _currentMatchIndex = -1;
+  bool _inPageSearching = false;
+  Timer? _inPageSearchDebounce;
+  Completer<String>? _inPageSearchCompleter;
 
   @override
   void initState() {
@@ -88,6 +102,15 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
         onMessageReceived: (message) {
           unawaited(_showInspectedElement(message.message));
         },
+     )
+      ..addJavaScriptChannel(
+        'NotionInPageSearch',
+        onMessageReceived: (message) {
+          final completer = _inPageSearchCompleter;
+          if (completer != null && !completer.isCompleted) {
+            completer.complete(message.message);
+          }
+        },
       )
       ..setOnConsoleMessage((message) {
         if (message.message.contains('[NOTION-LAYOUT]')) {
@@ -102,6 +125,10 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
           onNavigationRequest: _handleNavigation,
           onPageFinished: (_) {
             unawaited(_applyAppShell());
+            unawaited(_applyHighlightStyle());
+            if (widget.highlightBlockId != null) {
+              unawaited(_applyHighlightBlock());
+            }
             if (mounted && _hasError) {
               setState(() {
                 _hasError = false;
@@ -859,6 +886,244 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
   }
 
   @override
+  void dispose() {
+    _inPageSearchController.dispose();
+    _inPageSearchDebounce?.cancel();
+    super.dispose();
+  }
+
+  // ---- 搜索跳转定位（需求一）----
+
+  Future<void> _applyHighlightStyle() async {
+    try {
+      await _controller.runJavaScript(kHighlightStyleScript);
+    } catch (error) {
+      await AppLogger.log('Browser', 'inject highlight style failed: $error');
+    }
+  }
+
+  Future<void> _applyHighlightBlock() async {
+    final blockId = widget.highlightBlockId;
+    if (blockId == null || blockId.isEmpty) return;
+    try {
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _controller.runJavaScript(
+        buildHighlightBlockScript(
+          blockId: blockId,
+          snippet: widget.highlightSnippet,
+        ),
+      );
+      await AppLogger.log('Browser', 'highlight block injected: $blockId');
+    } catch (error) {
+      await AppLogger.log('Browser', 'highlight block failed: $error');
+    }
+  }
+
+  // ---- 页面内搜索（需求二）----
+
+  void _showInPageSearchSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    child: TextField(
+                      controller: _inPageSearchController,
+                      autofocus: true,
+                      onChanged: (value) {
+                        _inPageSearchDebounce?.cancel();
+                        _inPageSearchDebounce = Timer(
+                          const Duration(milliseconds: 400),
+                          () async {
+                            setSheetState(() => _inPageSearching = true);
+                            await _performInPageSearch(value);
+                            setSheetState(() => _inPageSearching = false);
+                          },
+                        );
+                      },
+                      onSubmitted: (value) {
+                        _inPageSearchDebounce?.cancel();
+                        unawaited(
+                          _performInPageSearch(value).then((_) {
+                            if (sheetContext.mounted) setSheetState(() {});
+                          }),
+                        );
+                      },
+                      textInputAction: TextInputAction.search,
+                      decoration: InputDecoration(
+                        hintText: '在当前页面搜索',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _inPageSearching
+                            ? const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: SizedBox.square(
+                                  dimension: 20,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                ),
+                              )
+                            : IconButton(
+                                icon: const Icon(Icons.close),
+                                onPressed: () =>
+                                    Navigator.of(sheetContext).pop(),
+                              ),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  if (_inPageMatches.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '${_inPageMatches.length} 个结果',
+                          style: Theme.of(sheetContext).textTheme.bodySmall,
+                        ),
+                      ),
+                    ),
+                  Flexible(
+                    child: _inPageMatches.isEmpty
+                        ? Center(
+                            child: Text(
+                              _inPageSearching ? '正在搜索…' : '输入关键词搜索',
+                              style:
+                                  Theme.of(sheetContext).textTheme.bodyMedium,
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                            itemCount: _inPageMatches.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final match = _inPageMatches[index];
+                              return InkWell(
+                                onTap: () {
+                                  Navigator.of(sheetContext).pop();
+                                  unawaited(_scrollToMatch(match.index));
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 10),
+                                  child: Text.rich(
+                                    _buildMatchContext(
+                                      match.context,
+                                      _inPageSearchController.text.trim(),
+                                      Theme.of(sheetContext)
+                                          .textTheme
+                                          .bodyMedium!,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  TextSpan _buildMatchContext(
+    String text,
+    String query,
+    TextStyle baseStyle,
+  ) {
+    if (query.isEmpty) return TextSpan(text: text, style: baseStyle);
+    final lowercaseText = text.toLowerCase();
+    final lowercaseQuery = query.toLowerCase();
+    final highlightStyle = baseStyle.copyWith(
+      color: Theme.of(context).colorScheme.primary,
+      fontWeight: FontWeight.w600,
+    );
+    final spans = <TextSpan>[];
+    var start = 0;
+    while (true) {
+      final index = lowercaseText.indexOf(lowercaseQuery, start);
+      if (index < 0) {
+        spans.add(TextSpan(text: text.substring(start), style: baseStyle));
+        break;
+      }
+      if (index > start) {
+        spans.add(
+          TextSpan(text: text.substring(start, index), style: baseStyle),
+        );
+      }
+      spans.add(
+        TextSpan(
+          text: text.substring(index, index + query.length),
+          style: highlightStyle,
+        ),
+      );
+      start = index + query.length;
+    }
+    return TextSpan(children: spans);
+  }
+
+  Future<void> _performInPageSearch(String rawQuery) async {
+    final query = rawQuery.trim();
+    if (query.isEmpty) {
+      _inPageMatches = [];
+      return;
+    }
+
+    final completer = Completer<String>();
+    _inPageSearchCompleter = completer;
+    try {
+      await _controller.runJavaScript(
+        buildInPageSearchScript(
+          query: query,
+          channelName: 'NotionInPageSearch',
+        ),
+      );
+      final raw = await completer.future.timeout(const Duration(seconds: 10));
+      final result = InPageSearchResult.parse(raw);
+      _inPageMatches = result.matches;
+      await AppLogger.log(
+        'Browser',
+        'in-page search: query="$query" matches=${result.total}',
+      );
+    } catch (error) {
+      _inPageMatches = [];
+      await AppLogger.log('Browser', 'in-page search failed: $error');
+    } finally {
+      if (identical(_inPageSearchCompleter, completer)) {
+        _inPageSearchCompleter = null;
+      }
+    }
+  }
+
+  Future<void> _scrollToMatch(int index) async {
+    try {
+      await _controller.runJavaScript(buildScrollToMatchScript(index));
+      _currentMatchIndex = index;
+    } catch (error) {
+      await AppLogger.log('Browser', 'scroll to match failed: $error');
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return PopScope<Object?>(
       canPop: false,
@@ -878,6 +1143,11 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
+            IconButton(
+              icon: const Icon(Icons.search),
+              tooltip: '页面内搜索',
+              onPressed: _showInPageSearchSheet,
+            ),
             if (_showElementInspector)
               IconButton(
                 icon: Icon(
