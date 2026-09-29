@@ -236,8 +236,91 @@ SPA = Single Page Application（单页应用）。Notion 网页版打开时先�
 | MainActivity blockId/snippet 传递 | `android/.../MainActivity.kt` | `openPageBrowser()`, `EXTRA_BLOCK_ID`, `EXTRA_SNIPPET` |
 
 ## 最近提交历史
+## 9/29-9/30 新增：常驻复用 + 更新优化 + 缓存层探索
+
+### 10. BrowserActivity 常驻复用（提交 `8109457`）
+
+**需求**：每次打开页面都从零加载 Notion SPA（5-20s），连续浏览体验差。
+
+**改动**：
+- `AndroidManifest.xml`：BrowserActivity 加 `launchMode="singleTask"` + `taskAffinity`（独立 task）
+- `onBackPressed` → `startActivity(MainActivity, REORDER_TO_FRONT)`，Activity 进后台不销毁
+- `onNewIntent`：复用已有 WebView `loadUrl()`，SPA 客户端路由接管（1-2s）
+- `onUserLeaveHint`：5 分钟空闲定时器自动 `finish()` 释放内存
+
+**副作用**：最近应用列表出现两条（可用 `excludeFromRecents` 消除）
+
+### 11. 更新失败友好提示 + 直连回退（提交 `7d2e8a0`）
+
+- 手动检查失败：弹对话框 + 重试按钮
+- 自动检查失败：弹 SnackBar（不再静默）
+- `UpdateService`：直连失败后自动用系统代理重试
+
+### 12. 返回按钮修复（提交 `28fbee4`）
+
+`moveTaskToBack` 经桌面后误回桌面 → 改为 `startActivity(MainActivity, REORDER_TO_FRONT)` 显式拉起 Flutter task。
+
+### 13. WebView 代理残留修复（提交 `31fe6e6`）
+
+Clash 关闭后 `applyWebViewProxy()` 没调 `clearProxyOverride()` → 代理残留。
+Flutter 侧 `Connection refused 127.127.28.67` 是 Clash fake-ip DNS 缓存，需重启手机。
+
+### 14. CSS 优化（提交 `0803243`）
+
+借鉴 Notion-Boost：隐藏帮助/升级/AI 按钮、紧凑顶栏、全宽内容。Flutter WebView + 原生同步。
+
+### 15. 本地缓存层探索与回退（提交 `5fefe29` ~ `349ba52`）
+
+**adb 分析官方 app**：
+- 冷启动 301ms，零网络（读本地 SQLite）
+- ~40MB Rust 原生库（CRDT/公式/rollups/JSON patch）
+- 4474 帧仅 6.46% 卡顿，6ms 中位帧耗时，18 个 View
+- 11 分钟导航 logcat 零内容请求
+
+**尝试**：
+1. `PageCacheService`（SharedPreferences + JSON，LRU 50 页）
+2. EditorScreen 先读缓存秒开 → 后台 `_refreshFromApi`
+3. 首页默认开 EditorScreen + 「用完整编辑器打开」按钮
+
+**结果：回退。** EditorScreen 渲染质量不够：
+- 表单风格（逐块 TextField），非文档排版
+- 无图片渲染、无行内格式
+- 视觉和 Notion 官方差太远
+
+**回退**：`_openPageInBrowser` 恢复 BrowserActivity。缓存层代码保留。
+
+### 经验教训
+
+1. **EditorScreen 不能替代 WebView** — 需做到接近 Notion 文档排版（`Text.rich`、图片、流式排版）才值得切回
+2. **缓存层本身正确** — `PageCacheService` 保留，待 EditorScreen 渲染改进后复用
+3. **BrowserActivity 常驻复用是当前最优解** — 视觉 = Notion 网页版（同一 SPA），速度靠复用
+4. **官方 app 快的根源是架构** — SQLite 离线 + CRDT 同步 + Rust 原生 + 原生 UI。不可复制但可借鉴「先读本地后同步」
+5. **Clash 代理残留** — 关闭后需 `clearProxyOverride()` + 重启清 DNS
+6. **Notion 桌面端也是 WebView（Electron）** — 加载同一 SPA，视觉一致。问题只在加载速度
+
+### 保留的代码资产
+
+| 资产 | 文件 | 状态 |
+|---|---|---|
+| `PageCacheService` | `lib/core/page_cache_service.dart` | 完整，待启用 |
+| EditorScreen 缓存集成 | `lib/features/editor/editor_screen.dart` | `_loadBlocks` 先读缓存 + `_refreshFromApi` |
+| EditorScreen 完整编辑器按钮 | `lib/features/editor/editor_screen.dart` | `_openInFullEditor()` |
+
+## 最近提交历史
 
 ```
+349ba52  revert: 首页回退到 BrowserActivity 默认视图
+273ca6d  fix: 移除未使用 import + 补 mounted 检查
+374ab30  feat: 首页点击页面默认开 EditorScreen + 缓存秒开
+e1ba183  fix: 补 dart:async 导入 + 移除重复 blocks 变量
+5fefe29  feat: 本地缓存层 — 先读缓存秒开，后台再同步 API
+5001038  fix: 统一数据库图标为 table_rows_outlined
+0803243  feat: 借鉴 Notion-Boost 的 CSS 优化移动端体验
+31fe6e6  fix: WebView 代理残留 ERR_PROXY_CONNECTION_FAILED
+28fbee4  fix: 返回按钮显式拉起 MainActivity task
+2acdeae  fix: 移除 update_service.dart 重复方法签名
+7d2e8a0  feat: 更新失败友好提示 + 直连回退系统代理
+8109457  feat: BrowserActivity 常驻复用 — SPA 只加载一次
 aff43dd  fix: 页面内搜索结果重复 — 限制搜索范围 + 上下文去重
 e34d7d0  fix: 闭包陷阱导致页面内搜索点击无法跳转 + 拦截分析追踪加速页面加载
 1901ef7  fix: block 高亮重试机制 + 页面内搜索 scrollIntoView 替换 window.scrollTo
