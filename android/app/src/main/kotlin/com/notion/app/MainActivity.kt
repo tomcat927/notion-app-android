@@ -343,8 +343,23 @@ class MainActivity : FlutterActivity() {
         val connectivityManager =
             getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val proxy = connectivityManager?.defaultProxy
-        val host = proxy?.host ?: return
-        val port = proxy?.port ?: return
+
+        val host = proxy?.host
+        val port = proxy?.port
+
+        if (host == null || port == null) {
+            // No system proxy detected — clear any previously set proxy override
+            // (e.g., Clash was closed but left WebView proxy stale).
+            try {
+                ProxyController.getInstance().clearProxyOverride(
+                    Executors.newSingleThreadExecutor(),
+                    Runnable {},
+                )
+            } catch (_: Exception) {
+                // Best-effort; WebView can still load directly.
+            }
+            return
+        }
 
         try {
             val proxyConfig = ProxyConfig.Builder()
