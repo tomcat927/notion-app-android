@@ -2392,7 +2392,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (updateInfo == null || !mounted) return;
       await showUpdatePrompt(context, updateInfo);
     } catch (_) {
-      // A failed background update check must not interrupt normal startup.
+      // A failed background update check must not interrupt normal startup,
+      // but show a subtle hint so the user knows something went wrong.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('自动检查更新失败，可在设置中手动检查'),
+          duration: Duration(seconds: 4),
+        ),
+      );
     }
   }
 

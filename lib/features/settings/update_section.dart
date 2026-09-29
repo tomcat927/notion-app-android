@@ -79,13 +79,48 @@ class _UpdateSectionState extends State<UpdateSection> {
           const SnackBar(content: Text('当前已是最新版本')),
         );
       } else {
-        await showUpdatePrompt(context, updateInfo);
-      }
-    } catch (_) {
+       await showUpdatePrompt(context, updateInfo);
+     }
+    } catch (error) {
       if (!mounted) return;
+      final errorMsg = error.toString();
+      final isTimeout = errorMsg.contains('TimeoutException') ||
+          errorMsg.contains('timed out');
+      final suggestion = isTimeout
+          ? '网络超时。如果开启了「更新直连」，尝试关闭后使用系统代理重试。'
+          : '请检查网络连接或代理设置后重试。';
       setState(() => _message = '检查更新失败');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('检查更新失败，请检查网络连接')),
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('检查更新失败'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(isTimeout ? '网络连接超时' : '发生错误'),
+              const SizedBox(height: 8),
+              Text(
+                suggestion,
+                style: Theme.of(dialogContext).textTheme.bodySmall,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _checkForUpdate();
+              },
+              child: const Text('重试'),
+            ),
+          ],
+        ),
       );
     } finally {
       if (mounted) setState(() => _checking = false);

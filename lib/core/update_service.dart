@@ -63,9 +63,10 @@ class UpdateService {
 
   /// 直连开启时绕过系统代理（gh-proxy 可国内直连），关闭则走系统代理。
   static Future<http.Client> _updateClient() async {
+  static Future<http.Client> _updateClient({bool forceProxy = false}) async {
     final prefs = await SharedPreferences.getInstance();
     final direct = prefs.getBool(directUpdatePreferenceKey) ?? true;
-    if (!direct) return http.Client();
+    if (!direct || forceProxy) return http.Client();
 
     final httpClient = HttpClient();
     httpClient.findProxy = (uri) => 'DIRECT';
@@ -75,9 +76,22 @@ class UpdateService {
   static Future<UpdateInfo?> checkForUpdate() async {
     final packageInfo = await PackageInfo.fromPlatform();
     final currentVersionCode = int.tryParse(packageInfo.buildNumber) ?? 0;
-    final info = await _checkFromManifest() ?? await _checkFromGitHubApi();
+    UpdateInfo? info;
+    try {
+      info = await _checkFromManifest() ?? await _checkFromGitHubApi();
+    } catch (error) {
+      await AppLogger.log('Update', 'primary check failed: $error');
+    }
+    if (info == null) {
+      await AppLogger.log('Update', 'trying fallback with system proxy');
+      try {
+        info = await _checkFromManifest(forceProxy: true) ??
+            await _checkFromGitHubApi(forceProxy: true);
+      } catch (error) {
+        await AppLogger.log('Update', 'fallback check also failed: $error');
+      }
+    }
     if (info == null) return null;
-
     await AppLogger.log(
       'Update',
       'current=$currentVersionCode latest=${info.versionCode}',
@@ -86,8 +100,9 @@ class UpdateService {
   }
 
   static Future<UpdateInfo?> _checkFromManifest() async {
+  static Future<UpdateInfo?> _checkFromManifest({bool forceProxy = false}) async {
     try {
-      final client = await _updateClient();
+      final client = await _updateClient(forceProxy: forceProxy);
       final response = await client
           .get(Uri.parse(_manifestUrl))
           .timeout(const Duration(seconds: 20));
@@ -125,7 +140,8 @@ class UpdateService {
   }
 
   static Future<UpdateInfo?> _checkFromGitHubApi() async {
-    final client = await _updateClient();
+  static Future<UpdateInfo?> _checkFromGitHubApi({bool forceProxy = false}) async {
+    final client = await _updateClient(forceProxy: forceProxy);
     final response = await client
         .get(
           Uri.parse(_apiUrl),
