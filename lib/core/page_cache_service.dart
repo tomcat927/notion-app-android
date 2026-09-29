@@ -55,13 +55,10 @@ class PageCacheService {
       final blocks = (decoded['blocks'] as List? ?? const [])
           .whereType<Map>()
           .map((m) => Map<String, dynamic>.from(m))
-          .toList();
+         .toList();
       return CachedPageData(
         title: decoded['title']?.toString() ?? '',
-        blocks: (decoded['blocks'] as List? ?? const [])
-            .whereType<Map>()
-            .map((m) => Map<String, dynamic>.from(m))
-            .toList(),
+        blocks: blocks,
         cachedAt: DateTime.tryParse(decoded['cachedAt']?.toString() ?? '') ??
             DateTime.fromMillisecondsSinceEpoch(0),
       );
