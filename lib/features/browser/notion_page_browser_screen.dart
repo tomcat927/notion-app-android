@@ -361,6 +361,30 @@ class _NotionPageBrowserScreenState extends State<NotionPageBrowserScreen> {
       margin-left: 0 !important;
       margin-right: 0 !important;
     }
+    .notion-help-button,
+    .notion-upgrade-button,
+    .notion-default-ai-container,
+    .notion-template-button,
+    .notion-ai-card,
+    .notion-ai-banner {
+      display: none !important;
+    }
+    .notion-topbar {
+      padding: 0 4px !important;
+      min-height: 36px !important;
+    }
+    .notion-topbar > div {
+      gap: 0 !important;
+    }
+    .notion-page-content {
+      max-width: 100% !important;
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+    }
+    .notion-page-view-title-row {
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+    }
   `;
 
   // JS 层：直接修改内联样式，绕过 Notion 的 React 重渲染约束

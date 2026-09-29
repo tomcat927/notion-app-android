@@ -749,10 +749,32 @@ class BrowserActivity : Activity() {
     document.head.appendChild(style);
   }
   style.textContent = [
-    '.notion-assistant-corner-origin-container',
-    '.notion-ai-button',
-    'img[alt="Notion AI face"]'
-  ].join(', ') + ' { display: none !important; visibility: hidden !important; }';
+    '.notion-assistant-corner-origin-container,',
+    '.notion-ai-button,',
+    'img[alt="Notion AI face"],',
+    '.notion-help-button,',
+    '.notion-upgrade-button,',
+    '.notion-default-ai-container,',
+    '.notion-template-button,',
+    '.notion-ai-card,',
+    '.notion-ai-banner {',
+    '  display: none !important;',
+    '  visibility: hidden !important;',
+    '}',
+    '.notion-topbar {',
+    '  padding: 0 4px !important;',
+    '  min-height: 36px !important;',
+    '}',
+    '.notion-page-content {',
+    '  max-width: 100% !important;',
+    '  padding-left: 8px !important;',
+    '  padding-right: 8px !important;',
+    '}',
+    '.notion-page-view-title-row {',
+    '  padding-left: 8px !important;',
+    '  padding-right: 8px !important;',
+    '}'
+  ].join('\n');
 })();
 """
 
