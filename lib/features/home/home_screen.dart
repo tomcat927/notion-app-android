@@ -15,6 +15,7 @@ import '../../core/notion_web_session.dart';
 import '../../core/remote_log_service.dart';
 import '../../core/update_service.dart';
 import '../auth/login_screen.dart';
+import '../browser/notion_page_browser_screen.dart';
 import '../editor/editor_screen.dart';
 import '../settings/update_section.dart';
 import '../settings/update_dialog.dart';
@@ -2220,17 +2221,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final title = _pageTitle(page);
     unawaited(RecentPagesService.addRecentPage(pageId, title));
-    await AppLogger.log('Home', '打开编辑器: $pageId');
+    if (_privateSearchBridge.hasController) {
+      await AppLogger.log('Home', '打开笔记前释放隐藏搜索 WebView: $pageId');
+      _privateSearchBridge.reset();
+    }
+    await AppLogger.log('Home', '使用内嵌浏览器打开: $pageId');
     _pendingBrowserRefreshPageId = pageId;
-    if (!mounted) return;
+    final opened = await NativeBrowser.openPage(pageId: pageId, title: title);
+    if (opened || !mounted) return;
+    _pendingBrowserRefreshPageId = null;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => EditorScreen(pageId: pageId, title: title),
+        builder: (_) => NotionPageBrowserScreen(
+          pageId: pageId,
+          title: title,
+        ),
       ),
     );
     if (mounted) {
-      _pendingBrowserRefreshPageId = null;
-      unawaited(_refreshVisiblePage(pageId, reason: 'editor_return'));
+      unawaited(_refreshVisiblePage(pageId, reason: 'flutter_browser_return'));
     }
   }
 
