@@ -15,7 +15,6 @@ import '../../core/notion_web_session.dart';
 import '../../core/remote_log_service.dart';
 import '../../core/update_service.dart';
 import '../auth/login_screen.dart';
-import '../browser/notion_page_browser_screen.dart';
 import '../editor/editor_screen.dart';
 import '../settings/update_section.dart';
 import '../settings/update_dialog.dart';
@@ -2223,6 +2222,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(RecentPagesService.addRecentPage(pageId, title));
     await AppLogger.log('Home', '打开编辑器: $pageId');
     _pendingBrowserRefreshPageId = pageId;
+    if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => EditorScreen(pageId: pageId, title: title),
