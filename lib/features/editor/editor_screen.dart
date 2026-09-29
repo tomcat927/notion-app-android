@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/notion_client.dart';
+import '../../core/page_cache_service.dart';
 
 List<Map<String, dynamic>> _plainRichTextPayload(String text) {
   if (text.isEmpty) return const [];
@@ -59,6 +60,7 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _discardConfirmed = false;
   String? _loadError;
   String? _saveError;
+  bool _hasUserEdits = false;
 
   bool get _hasChanges => _blocks.any((block) => block.hasChanges);
   bool get _willReplaceFormatting =>
@@ -88,6 +90,30 @@ class _EditorScreenState extends State<EditorScreen> {
       .toList();
 
   Future<void> _loadBlocks() async {
+    final cached = await PageCacheService.getCachedPage(widget.pageId);
+    if (cached != null && cached.blocks.isNotEmpty) {
+      final cachedBlocks = cached.blocks.map(_BlockDraft.fromCache).toList();
+      _disposeBlocks(_blocks);
+      _blocks
+        ..clear()
+        ..addAll(cachedBlocks);
+      _blockKeys
+        ..clear()
+        ..addEntries(_blocks.map((block) => MapEntry(block, GlobalKey())));
+      for (final block in _blocks) {
+        block.controller?.addListener(_onDraftChanged);
+      }
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadError = null;
+        });
+      }
+      await AppLogger.log('Editor', '从缓存加载: ${widget.pageId} (${cachedBlocks.length} 块)');
+      unawaited(_refreshFromApi());
+      return;
+    }
+
     if (mounted) {
       setState(() {
         _loading = true;
@@ -119,6 +145,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
       setState(() => _loading = false);
       await AppLogger.log('Editor', '页面块加载完成，共 ${_blocks.length} 块');
+      await _cacheBlocks(loaded);
     } catch (error) {
       _disposeBlocks(loaded);
       await AppLogger.log('Editor', '页面块加载失败: $error');
@@ -128,6 +155,41 @@ class _EditorScreenState extends State<EditorScreen> {
         _loadError = error.toString();
       });
     }
+  }
+
+  Future<void> _refreshFromApi() async {
+    if (_hasUserEdits) return;
+    final loaded = <_BlockDraft>[];
+    try {
+      await _loadChildren(widget.pageId, 0, loaded);
+      if (!mounted || _hasUserEdits) {
+        _disposeBlocks(loaded);
+        return;
+      }
+      _disposeBlocks(_blocks);
+      _blocks
+        ..clear()
+        ..addAll(loaded);
+      _blockKeys
+        ..clear()
+        ..addEntries(_blocks.map((block) => MapEntry(block, GlobalKey())));
+      for (final block in _blocks) {
+        block.controller?.addListener(_onDraftChanged);
+      }
+      if (mounted) setState(() {});
+      await _cacheBlocks(loaded);
+      await AppLogger.log('Editor', '后台刷新完成: ${widget.pageId} (${loaded.length} 块)');
+    } catch (error) {
+      _disposeBlocks(loaded);
+      await AppLogger.log('Editor', '后台刷新失败: $error');
+    }
+  }
+
+  Future<void> _cacheBlocks(List<_BlockDraft> blocks) async {
+    try {
+      final cacheData = blocks.map((b) => b.toCacheJson()).toList();
+      await PageCacheService.cachePage(widget.pageId, widget.title, cacheData);
+    } catch (_) {}
   }
 
   Future<void> _loadChildren(
@@ -173,6 +235,7 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _onDraftChanged() {
+    _hasUserEdits = true;
     if (mounted) setState(() {});
   }
 
@@ -328,8 +391,9 @@ class _EditorScreenState extends State<EditorScreen> {
         }
       }
 
-      await AppLogger.log('Editor', '保存完成，共更新 $savedCount 块');
-      await _loadBlocks();
+     await AppLogger.log('Editor', '保存完成，共更新 $savedCount 块');
+      await PageCacheService.clearCache(widget.pageId);
+     await _loadBlocks();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已保存到 Notion')),
@@ -724,10 +788,40 @@ class _BlockDraft {
       checked: false,
       hasFormatting: false,
       displayText: '',
+   );
+ }
+
+  factory _BlockDraft.fromCache(Map<String, dynamic> cached) {
+    final type = cached['type']?.toString() ?? 'paragraph';
+    final editable = _editableTypes.contains(type);
+    final text = cached['text']?.toString() ?? '';
+    return _BlockDraft._(
+      id: cached['id']?.toString(),
+      type: type,
+      depth: cached['depth'] as int? ?? 0,
+      controller: editable ? TextEditingController(text: text) : null,
+      focusNode: editable ? FocusNode() : null,
+      originalText: text,
+      originalChecked: cached['checked'] as bool? ?? false,
+      checked: cached['checked'] as bool? ?? false,
+      hasFormatting: cached['hasFormatting'] as bool? ?? false,
+      displayText: cached['displayText']?.toString() ?? '',
     );
   }
 
-  bool get isNew => id == null;
+  Map<String, dynamic> toCacheJson() {
+    return {
+      'id': id,
+      'type': type,
+      'depth': depth,
+      'text': text,
+      'checked': checked,
+      'hasFormatting': hasFormatting,
+      'displayText': displayText,
+    };
+  }
+
+ bool get isNew => id == null;
   bool get isEditable => controller != null;
   int get headingLevel {
     switch (type) {
