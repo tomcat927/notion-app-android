@@ -62,7 +62,6 @@ class UpdateService {
   );
 
   /// 直连开启时绕过系统代理（gh-proxy 可国内直连），关闭则走系统代理。
-  static Future<http.Client> _updateClient() async {
   static Future<http.Client> _updateClient({bool forceProxy = false}) async {
     final prefs = await SharedPreferences.getInstance();
     final direct = prefs.getBool(directUpdatePreferenceKey) ?? true;
@@ -99,7 +98,6 @@ class UpdateService {
     return info.versionCode > currentVersionCode ? info : null;
   }
 
-  static Future<UpdateInfo?> _checkFromManifest() async {
   static Future<UpdateInfo?> _checkFromManifest({bool forceProxy = false}) async {
     try {
       final client = await _updateClient(forceProxy: forceProxy);
@@ -139,7 +137,6 @@ class UpdateService {
     }
   }
 
-  static Future<UpdateInfo?> _checkFromGitHubApi() async {
   static Future<UpdateInfo?> _checkFromGitHubApi({bool forceProxy = false}) async {
     final client = await _updateClient(forceProxy: forceProxy);
     final response = await client
