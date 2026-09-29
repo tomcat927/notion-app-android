@@ -824,7 +824,7 @@ class _BlockDraft {
       case 'child_page':
         return Icons.description_outlined;
       case 'child_database':
-        return Icons.table_chart_outlined;
+        return Icons.table_rows_outlined;
       case 'column_list':
       case 'column':
         return Icons.view_column_outlined;

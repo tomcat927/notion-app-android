@@ -973,7 +973,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
       case 'collection_view_page':
       case 'collection_view':
       case 'collection':
-        return Icons.table_chart_outlined;
+        return Icons.table_rows_outlined;
       default:
         return Icons.description_outlined;
     }

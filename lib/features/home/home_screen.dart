@@ -1621,7 +1621,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.dataset_outlined, size: 18),
+            const Icon(Icons.table_rows_outlined, size: 18),
                             const SizedBox(width: 8),
                             Flexible(
                               child: Text(
@@ -2115,7 +2115,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ..._databases.map((database) {
           final id = database['id']?.toString() ?? '';
           return ListTile(
-            leading: const Icon(Icons.dataset_outlined),
+            leading: const Icon(Icons.table_rows_outlined),
             title: Text(
               _databaseTitle(database),
               maxLines: 1,
