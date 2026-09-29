@@ -30,7 +30,14 @@ class NativeBrowser {
     await prefs.setBool(showElementInspectorPreferenceKey, value);
   }
 
- static Future<bool> openPage({
+  static Future<void> prewarmWebView() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<bool>('prewarm');
+    } catch (_) {}
+  }
+
+  static Future<bool> openPage({
    required String pageId,
    required String title,
     String? blockId,

@@ -10,8 +10,12 @@ import android.net.ProxyInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.webkit.CookieManager
+import android.webkit.WebSettings
+import android.webkit.WebViewClient
 import android.webkit.WebView
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
@@ -75,6 +79,10 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("snippet"),
                        result,
                    )
+                    "prewarm" -> {
+                        prewarmWebView()
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -248,6 +256,35 @@ class MainActivity : FlutterActivity() {
         } catch (error: Exception) {
             emptyMap()
         }
+    }
+
+    private var prewarmWebView: WebView? = null
+    private val prewarmHandler = Handler(Looper.getMainLooper())
+
+    private fun prewarmWebView() {
+        if (prewarmWebView != null) return
+        val webView = WebView(this)
+        prewarmWebView = webView
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+            userAgentString = "Mozilla/5.0 (Linux; Android 10; K) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/141.0.0.0 Mobile Safari/537.36"
+        }
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                prewarmHandler.removeCallbacksAndMessages(null)
+                view?.destroy()
+                prewarmWebView = null
+            }
+        }
+        webView.loadUrl("https://www.notion.so")
+        prewarmHandler.postDelayed({
+            prewarmWebView?.destroy()
+            prewarmWebView = null
+        }, 30000)
     }
 
     private fun clearWebViewCache(result: MethodChannel.Result) {

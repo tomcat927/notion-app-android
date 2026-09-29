@@ -142,6 +142,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_loadMonthGroupPreference());
     unawaited(_loadRemoteLogConfig());
     unawaited(_prewarmWebSession());
+    unawaited(NativeBrowser.prewarmWebView());
   }
 
   Future<void> _prewarmWebSession() async {

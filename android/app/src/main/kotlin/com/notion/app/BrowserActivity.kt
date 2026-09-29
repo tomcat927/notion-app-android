@@ -296,8 +296,9 @@ class BrowserActivity : Activity() {
             useWideViewPort = true
             builtInZoomControls = true
             displayZoomControls = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            userAgentString = MOBILE_USER_AGENT
+           mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+           userAgentString = MOBILE_USER_AGENT
         }
        view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
        view.addJavascriptInterface(OutlineBridge(), "NotionOutline")
