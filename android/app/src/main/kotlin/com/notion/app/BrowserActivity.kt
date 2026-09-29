@@ -89,8 +89,11 @@ class BrowserActivity : Activity() {
         if (currentWebView != null && currentWebView.canGoBack()) {
             currentWebView.goBack()
             return
+       }
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
         }
-        moveTaskToBack(true)
+        startActivity(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
