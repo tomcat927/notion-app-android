@@ -2221,26 +2221,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final title = _pageTitle(page);
     unawaited(RecentPagesService.addRecentPage(pageId, title));
-    if (_privateSearchBridge.hasController) {
-      await AppLogger.log('Home', '打开笔记前释放隐藏搜索 WebView: $pageId');
-      _privateSearchBridge.reset();
-    }
-    await AppLogger.log('Home', '使用内嵌浏览器打开: $pageId');
-
+    await AppLogger.log('Home', '打开编辑器: $pageId');
     _pendingBrowserRefreshPageId = pageId;
-    final opened = await NativeBrowser.openPage(pageId: pageId, title: title);
-    if (opened || !mounted) return;
-    _pendingBrowserRefreshPageId = null;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => NotionPageBrowserScreen(
-          pageId: pageId,
-          title: title,
-        ),
+        builder: (_) => EditorScreen(pageId: pageId, title: title),
       ),
     );
     if (mounted) {
-      unawaited(_refreshVisiblePage(pageId, reason: 'flutter_browser_return'));
+      _pendingBrowserRefreshPageId = null;
+      unawaited(_refreshVisiblePage(pageId, reason: 'editor_return'));
     }
   }
 

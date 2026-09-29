@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import '../../core/app_logger.dart';
 import '../../core/notion_client.dart';
 import '../../core/page_cache_service.dart';
+import '../../core/native_browser.dart';
+import '../browser/notion_page_browser_screen.dart';
 
 List<Map<String, dynamic>> _plainRichTextPayload(String text) {
   if (text.isEmpty) return const [];
@@ -408,7 +410,22 @@ class _EditorScreenState extends State<EditorScreen> {
       );
     } finally {
       if (mounted) setState(() => _saving = false);
-    }
+   }
+ }
+
+  Future<void> _openInFullEditor() async {
+    final pageId = widget.pageId;
+    final title = widget.title;
+    final opened = await NativeBrowser.openPage(pageId: pageId, title: title);
+    if (opened || !mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NotionPageBrowserScreen(
+          pageId: pageId,
+          title: title,
+        ),
+      ),
+    );
   }
 
   Future<bool> _confirmClose() async {
@@ -480,6 +497,11 @@ class _EditorScreenState extends State<EditorScreen> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
+            IconButton(
+              icon: const Icon(Icons.open_in_new),
+              tooltip: '用完整编辑器打开',
+              onPressed: _openInFullEditor,
+            ),
             if (_saving)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16),
