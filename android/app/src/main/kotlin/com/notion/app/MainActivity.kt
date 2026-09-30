@@ -2,6 +2,9 @@ package com.notion.app
 
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -21,6 +24,8 @@ import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
 import androidx.core.content.FileProvider
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -38,6 +43,17 @@ class MainActivity : FlutterActivity() {
         installCrashHandler()
         super.onCreate(savedInstanceState)
         writeHistoricalProcessExits()
+        if (intent?.getBooleanExtra("install_update", false) == true) {
+            Handler(Looper.getMainLooper()).postDelayed({ installPendingUpdate() }, 1500)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra("install_update", false)) {
+            installPendingUpdate()
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -47,6 +63,10 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "installUpdate" -> installUpdate(call.argument<String>("path"), result)
+                    "showUpdateNotification" -> {
+                        showUpdateNotification()
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -411,6 +431,50 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
             // WebView proxy support is best-effort; the page can still load directly.
         }
+    }
+
+    private fun showUpdateNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "update_notification",
+                "更新通知",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            )
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
+        }
+        val installIntent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra("install_update", true)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, installIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, "update_notification")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Notion Lite 更新就绪")
+            .setContentText("点击安装新版本")
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        try {
+            NotificationManagerCompat.from(this).notify(1001, notification)
+        } catch (_: SecurityException) {}
+    }
+
+    private fun installPendingUpdate() {
+        val apkFile = File(cacheDir, "apk_updates/notion-app-update.apk")
+        if (!apkFile.exists()) return
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", apkFile)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+        } catch (_: Exception) {}
     }
 
     private fun installUpdate(path: String?, result: MethodChannel.Result) {

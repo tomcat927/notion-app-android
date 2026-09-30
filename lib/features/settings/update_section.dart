@@ -166,6 +166,7 @@ class _UpdateSectionState extends State<UpdateSection> {
         dialogOpen = false;
         navigator.pop();
       }
+      await UpdateService.showDownloadCompleteNotification();
       await UpdateService.installApk(file);
       scaffoldMessenger.showSnackBar(
         const SnackBar(content: Text('已启动系统安装器')),

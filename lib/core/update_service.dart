@@ -239,6 +239,13 @@ class UpdateService {
   }
 
   static Future<void> installApk(File file) async {
+  static Future<void> showDownloadCompleteNotification() async {
+    try {
+      await _installChannel.invokeMethod<bool>('showUpdateNotification');
+    } catch (_) {}
+  }
+
+  static Future<void> installApk(File file) async {
     await _installChannel.invokeMethod<bool>('installUpdate', {
       'path': file.path,
     });
