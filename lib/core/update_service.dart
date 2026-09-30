@@ -191,7 +191,6 @@ class UpdateService {
     final updateDir = Directory(path.join(baseDir.path, 'apk_updates'));
     await updateDir.create(recursive: true);
     final file = File(path.join(updateDir.path, 'notion-app-update.apk'));
-    if (await file.exists()) await file.delete();
 
     try {
       await _download(
@@ -209,11 +208,11 @@ class UpdateService {
 
       final actualChecksum = (await _sha256(file)).toLowerCase();
       if (actualChecksum != expectedChecksum.toLowerCase()) {
+        if (await file.exists()) await file.delete();
         throw Exception('SHA-256 校验失败');
       }
       return file;
     } catch (error) {
-      if (await file.exists()) await file.delete();
       await AppLogger.log('Update', 'download/verify failed: $error');
       rethrow;
     }
@@ -236,16 +235,25 @@ class UpdateService {
       try {
         final client = await _updateClient();
         final request = http.Request('GET', Uri.parse(url));
+        final existingBytes = await file.exists() ? await file.length() : 0;
+        if (existingBytes > 0) {
+          request.headers['Range'] = 'bytes=$existingBytes-';
+        }
         final response = await client
             .send(request)
-            .timeout(const Duration(seconds: 30));
-        if (response.statusCode != 200) {
+            .timeout(const Duration(seconds: 120));
+        if (response.statusCode == 416) {
+          await file.delete();
+          throw Exception('文件已存在但可能损坏');
+        }
+        if (response.statusCode != 200 && response.statusCode != 206) {
           throw Exception('HTTP ${response.statusCode}');
         }
-
-        final totalBytes = response.contentLength ?? 0;
-        var receivedBytes = 0;
-        final sink = file.openWrite();
+        final isResume = response.statusCode == 206;
+        final contentLength = response.contentLength ?? 0;
+        final totalBytes = isResume ? existingBytes + contentLength : contentLength;
+        var receivedBytes = existingBytes;
+        final sink = file.openWrite(mode: isResume ? FileMode.append : FileMode.write);
         try {
           await for (final chunk in response.stream) {
             receivedBytes += chunk.length;
@@ -260,14 +268,12 @@ class UpdateService {
         } finally {
           client.close();
         }
-
         if (totalBytes > 0 && await file.length() != totalBytes) {
-          throw Exception('下载不完整');
+          throw Exception('下载不完整: ${await file.length()}/$totalBytes');
         }
         return;
       } catch (error) {
         lastError = error;
-        if (await file.exists()) await file.delete();
         await AppLogger.log('Update', 'download failed: $error');
       }
     }
