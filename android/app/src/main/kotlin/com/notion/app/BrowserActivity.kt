@@ -805,7 +805,6 @@ class BrowserActivity : Activity() {
 
         private const val INSTALL_OUTLINE_SCRIPT = """
 (() => {
-  const collect = () => Array.from(document.querySelectorAll('h1, h2, h3'))
   const collect = () => {
     if (!document.querySelector('.notion-page-content')) return [];
     return Array.from(document.querySelectorAll('h1, h2, h3'))
