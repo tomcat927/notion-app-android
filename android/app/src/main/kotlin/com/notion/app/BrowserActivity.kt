@@ -279,7 +279,7 @@ class BrowserActivity : Activity() {
     ): ImageButton {
         return ImageButton(this).apply {
             contentDescription = description
-            imageResource = drawableRes
+            setImageResource(drawableRes)
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(dp(12), dp(12), dp(12), dp(12))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -294,7 +294,7 @@ class BrowserActivity : Activity() {
                 }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                tooltipText = description
+                setTooltipText(description)
             }
             setOnClickListener { onClick() }
         }
