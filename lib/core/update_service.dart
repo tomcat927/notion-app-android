@@ -50,6 +50,7 @@ class UpdateInfo {
 class UpdateService {
   static const String autoUpdatePreferenceKey = 'auto_check_update';
   static const String directUpdatePreferenceKey = 'direct_update';
+  static const String notificationPreferenceKey = 'update_notification';
   static const String _owner = 'tomcat927';
   static const String _repository = 'notion-app-android';
   static const String _proxyPrefix = 'https://gh-proxy.com/';
