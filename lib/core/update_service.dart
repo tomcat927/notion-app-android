@@ -192,6 +192,26 @@ class UpdateService {
     await updateDir.create(recursive: true);
     final file = File(path.join(updateDir.path, 'notion-app-update.apk'));
 
+    // Check if APK already downloaded and valid — skip re-download
+    if (await file.exists() && await file.length() > 0) {
+      try {
+        final expectedChecksum = await _readChecksum([
+          info.checksumUrl,
+          info.fallbackChecksumUrl,
+        ]);
+        if (expectedChecksum != null) {
+          final actualChecksum = (await _sha256(file)).toLowerCase();
+          if (actualChecksum == expectedChecksum.toLowerCase()) {
+            await AppLogger.log('Update', 'APK already downloaded, skipping download');
+            onProgress(1.0);
+            return file;
+          }
+        }
+      } catch (_) {
+        // Checksum check failed — proceed with download
+      }
+    }
+
     try {
       await _download(
         [info.downloadUrl, info.fallbackDownloadUrl],
@@ -219,7 +239,6 @@ class UpdateService {
   }
 
   static Future<void> installApk(File file) async {
-    await CacheCleanupService.markUpdatePackageForCleanup();
     await _installChannel.invokeMethod<bool>('installUpdate', {
       'path': file.path,
     });
