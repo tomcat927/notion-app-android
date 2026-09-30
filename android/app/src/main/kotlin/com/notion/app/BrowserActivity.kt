@@ -7,8 +7,10 @@ import android.content.ClipData
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Typeface
+import android.text.TextUtils
 import android.net.Uri
 import android.os.Build
+import android.util.TypedValue
 import android.os.Bundle
 import android.os.SystemClock
 import android.os.Handler
@@ -30,6 +32,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -158,21 +162,16 @@ class BrowserActivity : Activity() {
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(6), dp(8), dp(6))
+            setPadding(dp(4), 0, dp(4), 0)
             setBackgroundColor(0xFFFFFFFF.toInt())
         }
 
         toolbar.addView(
-            Button(this).apply {
-                text = "返回"
-                textSize = 13f
-                isAllCaps = false
-                setOnClickListener { onBackPressed() }
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
+            createToolbarIconButton(
+                R.drawable.ic_toolbar_back,
+                "返回",
+            ) { onBackPressed() },
+            LinearLayout.LayoutParams(dp(48), dp(48)),
         )
 
         if (showElementInspectorToolbar) {
@@ -190,50 +189,46 @@ class BrowserActivity : Activity() {
             )
        }
 
-        toolbar.addView(
-            Button(this).apply {
-                text = "搜索"
-                textSize = 13f
-                isAllCaps = false
-                setOnClickListener { showInPageSearch() }
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-
         titleView = TextView(this).apply {
             text = title
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(0xFF111827.toInt())
+            setTextColor(0xFF37352F.toInt())
             setSingleLine(true)
-            setPadding(dp(8), 0, dp(8), 0)
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), 0, dp(4), 0)
         }
         toolbar.addView(
             titleView,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+            LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                1f,
+            ),
         )
 
         toolbar.addView(
-            Button(this).apply {
-                text = "刷新"
-                textSize = 13f
-                isAllCaps = false
-                setOnClickListener { webView?.reload() }
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
+            createToolbarIconButton(
+                R.drawable.ic_toolbar_search,
+                "搜索",
+            ) { showInPageSearch() },
+            LinearLayout.LayoutParams(dp(48), dp(48)),
+        )
+
+        toolbar.addView(
+            createToolbarIconButton(
+                R.drawable.ic_toolbar_refresh,
+                "刷新",
+            ) { webView?.reload() },
+            LinearLayout.LayoutParams(dp(48), dp(48)),
         )
 
         root.addView(
             toolbar,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(48),
             ),
         )
 
@@ -275,6 +270,34 @@ class BrowserActivity : Activity() {
         )
 
         return root
+    }
+
+    private fun createToolbarIconButton(
+        drawableRes: Int,
+        description: String,
+        onClick: () -> Unit,
+    ): ImageButton {
+        return ImageButton(this).apply {
+            contentDescription = description
+            imageResource = drawableRes
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                val backgroundValue = TypedValue()
+                theme.resolveAttribute(
+                    android.R.attr.selectableItemBackgroundBorderless,
+                    backgroundValue,
+                    true,
+                )
+                if (backgroundValue.resourceId != 0) {
+                    setBackgroundResource(backgroundValue.resourceId)
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                tooltipText = description
+            }
+            setOnClickListener { onClick() }
+        }
     }
 
     private fun createWebView() {
