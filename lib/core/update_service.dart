@@ -206,6 +206,9 @@ class UpdateService {
             await AppLogger.log('Update', 'APK already downloaded, skipping download');
             onProgress(1.0);
             return file;
+          } else {
+            // Checksum mismatch — wrong version or corrupted, delete and re-download
+            await file.delete();
           }
         }
       } catch (_) {
@@ -260,6 +263,13 @@ class UpdateService {
     for (final url in urls) {
       try {
         final client = await _updateClient();
+        // Check if URL changed since last download — delete partial file if so
+        final prefs = await SharedPreferences.getInstance();
+        final lastUrl = prefs.getString('last_download_url');
+        if (lastUrl != null && lastUrl != url && await file.exists()) {
+          await file.delete();
+        }
+        await prefs.setString('last_download_url', url);
         final request = http.Request('GET', Uri.parse(url));
         final existingBytes = await file.exists() ? await file.length() : 0;
         if (existingBytes > 0) {
