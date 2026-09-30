@@ -54,7 +54,6 @@ class _UpdateSectionState extends State<UpdateSection> {
     });
   }
 
-  Future<void> _setDirectUpdate(bool value) async {
   Future<void> _setUpdateNotification(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(UpdateService.notificationPreferenceKey, value);
