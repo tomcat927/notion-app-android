@@ -782,6 +782,9 @@ class BrowserActivity : Activity() {
         private const val INSTALL_OUTLINE_SCRIPT = """
 (() => {
   const collect = () => Array.from(document.querySelectorAll('h1, h2, h3'))
+  const collect = () => {
+    if (!document.querySelector('.notion-page-content')) return [];
+    return Array.from(document.querySelectorAll('h1, h2, h3'))
     .filter(node => (node.innerText || node.textContent || '').trim())
     .map((node, index) => {
       if (!node.dataset.notionOutlineId) {
@@ -793,11 +796,13 @@ class BrowserActivity : Activity() {
         text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim()
       };
     });
+  };
 
   let lastCount = -1;
   let scheduled = false;
   const updateVisibility = () => {
     scheduled = false;
+    if (!document.body || !document.querySelector('.notion-page-content')) return;
     const count = document.querySelectorAll('h1, h2, h3').length;
     if (count === lastCount) return;
     lastCount = count;
@@ -831,11 +836,14 @@ class BrowserActivity : Activity() {
       item.type = 'button';
       item.textContent = heading.text;
       item.style.cssText = 'display:block;width:100%;border:0;background:transparent;text-align:left;padding:10px 10px 10px ' + (10 + (heading.level - 1) * 20) + 'px;font-size:15px;color:#111827';
-      item.addEventListener('click', () => {
-        const target = document.querySelector('[data-notion-outline-id="' + heading.id + '"]');
-        panel.remove();
-        if (target) target.scrollIntoView({behavior:'smooth', block:'start'});
-      });
+     item.addEventListener('click', () => {
+       const target = document.querySelector('[data-notion-outline-id="' + heading.id + '"]');
+       panel.remove();
+       if (!target) return;
+       target.scrollIntoView({behavior:'smooth', block:'start'});
+       setTimeout(function() { target.scrollIntoView({behavior:'smooth', block:'start'}); }, 500);
+       setTimeout(function() { target.scrollIntoView({behavior:'smooth', block:'start'}); }, 1500);
+     });
       panel.appendChild(item);
     });
 
@@ -845,13 +853,16 @@ class BrowserActivity : Activity() {
     close.style.cssText = 'display:block;width:100%;border:0;border-top:1px solid #e5e7eb;background:transparent;padding:12px;font-size:15px;color:#2563eb';
     close.addEventListener('click', () => panel.remove());
     panel.appendChild(close);
-    document.body.appendChild(panel);
+   if (!document.body) return;
+   document.body.appendChild(panel);
   };
 
   updateVisibility();
   if (window.__notionOutlineObserver) window.__notionOutlineObserver.disconnect();
   window.__notionOutlineObserver = new MutationObserver(scheduleUpdate);
-  window.__notionOutlineObserver.observe(document.body, {childList:true, subtree:true});
+  if (document.body) {
+    window.__notionOutlineObserver.observe(document.body, {childList:true, subtree:true});
+  }
 })();
 """
 
