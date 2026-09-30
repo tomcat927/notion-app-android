@@ -114,6 +114,7 @@ class BrowserActivity : Activity() {
         if (currentWebView != null) {
             val url = "https://www.notion.so/$newPageId"
             writeBrowserLog("reuse webview: pageId=$newPageId title=$newTitle blockId=$highlightBlockId")
+            currentWebView.clearHistory()
             currentWebView.loadUrl(url)
         } else {
             writeBrowserLog("webview null, recreating: $newPageId")
