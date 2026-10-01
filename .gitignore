@@ -17,6 +17,9 @@ android/key.properties
 *.jks
 *.keystore
 
+# Local release signing backup
+secrets/
+
 # iOS (not needed)
 ios/
 
