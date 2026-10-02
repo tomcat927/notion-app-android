@@ -24,7 +24,7 @@ import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import io.getstream.photoview.PhotoView
+import com.github.chrisbanes.photoview.PhotoView
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
