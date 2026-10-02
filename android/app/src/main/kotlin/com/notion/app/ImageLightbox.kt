@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.Message
 import android.provider.MediaStore
+import android.util.LruCache
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -57,7 +58,8 @@ class ImageLightbox(private val activity: Activity) {
     }
 
     fun show(url: String) {
-        val cookie = readCookie(url)
+        val cachedBytes = imageCache.get(url)
+        val cookie = if (cachedBytes == null) readCookie(url) else null
 
         val container = FrameLayout(activity).apply {
             setBackgroundColor(Color.BLACK)
@@ -114,7 +116,7 @@ class ImageLightbox(private val activity: Activity) {
         closeButton.setOnClickListener { dialog.dismiss() }
         dialog.show()
 
-        fetchBitmap(url, cookie) { bitmap ->
+        fetchBitmap(url, cachedBytes, cookie) { bitmap ->
             activity.runOnUiThread {
                 if (dismissed) return@runOnUiThread
                 progress.visibility = View.GONE
@@ -129,10 +131,11 @@ class ImageLightbox(private val activity: Activity) {
     }
 
     fun save(url: String) {
-        val cookie = readCookie(url)
+        val cachedBytes = imageCache.get(url)
+        val cookie = if (cachedBytes == null) readCookie(url) else null
         ioExecutor.execute {
             val bytes = try {
-                fetchBytes(url, cookie)
+                cachedBytes ?: fetchBytes(url, cookie).also { imageCache.put(url, it) }
             } catch (ignored: Exception) {
                 null
             }
@@ -212,10 +215,17 @@ class ImageLightbox(private val activity: Activity) {
         }
     }
 
-    private fun fetchBitmap(url: String, cookie: String?, callback: (Bitmap?) -> Unit) {
+    private fun fetchBitmap(
+        url: String,
+        cachedBytes: ByteArray?,
+        cookie: String?,
+        callback: (Bitmap?) -> Unit,
+    ) {
         ioExecutor.execute {
             val bitmap = try {
-                decodeDownsampled(fetchBytes(url, cookie))
+                val bytes = cachedBytes
+                    ?: fetchBytes(url, cookie).also { imageCache.put(url, it) }
+                decodeDownsampled(bytes)
             } catch (ignored: Exception) {
                 null
             }
@@ -297,6 +307,16 @@ class ImageLightbox(private val activity: Activity) {
 
         private val ioExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "image-lightbox")
+        }
+
+        // 按 URL 缓存原始图片字节：同一进程内重复打开/保存不再重新下载。
+        private val imageCache = object : LruCache<String, ByteArray>(cacheMaxBytes()) {
+            override fun sizeOf(key: String, value: ByteArray): Int = value.size
+        }
+
+        private fun cacheMaxBytes(): Int {
+            val heap = Runtime.getRuntime().maxMemory()
+            return (heap / 8).toInt().coerceIn(16 * 1024 * 1024, 64 * 1024 * 1024)
         }
 
         private val CLICK_INTERCEPT_SCRIPT = """
