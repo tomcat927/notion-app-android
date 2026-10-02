@@ -7,7 +7,6 @@ import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.graphics.ColorDrawable
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Environment
@@ -17,7 +16,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
-import android.webkit.HitTestResult
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.widget.FrameLayout
@@ -99,7 +97,7 @@ class ImageLightbox(private val activity: Activity) {
 
         val dialog = Dialog(activity)
         dialog.window?.apply {
-            setBackgroundDrawable(ColorDrawable(Color.BLACK))
+            setBackgroundDrawableResource(android.R.color.black)
             setLayout(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -160,15 +158,12 @@ class ImageLightbox(private val activity: Activity) {
     private fun handleLongPress(webView: WebView): Boolean {
         val hit = webView.hitTestResult
         val url = when (hit.type) {
-            HitTestResult.IMAGE_TYPE -> hit.extra
-            HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+            WebView.HitTestResult.IMAGE_TYPE -> hit.extra
+            WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
                 val message = Message.obtain()
                 try {
-                    if (webView.requestFocusNodeHref(message)) {
-                        message.data?.getString("src")
-                    } else {
-                        null
-                    }
+                    webView.requestFocusNodeHref(message)
+                    message.data?.getString("src")
                 } finally {
                     message.recycle()
                 }
