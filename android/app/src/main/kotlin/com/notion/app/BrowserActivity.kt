@@ -60,6 +60,7 @@ class BrowserActivity : Activity() {
    private val rendererGoneTimestamps = mutableListOf<Long>()
    private var rendererGoneCount = 0
     private val idleReleaseHandler = Handler(Looper.getMainLooper())
+    private val imageLightbox: ImageLightbox by lazy { ImageLightbox(this) }
     private val idleReleaseRunnable = Runnable {
         writeBrowserLog("idle release timeout, finishing activity")
         finish()
@@ -331,6 +332,7 @@ class BrowserActivity : Activity() {
        view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
        view.addJavascriptInterface(OutlineBridge(), "NotionOutline")
         view.addJavascriptInterface(InPageSearchBridge(), "NotionInPageSearchNative")
+       imageLightbox.install(view)
        CookieManager.getInstance().setAcceptCookie(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
@@ -368,7 +370,8 @@ class BrowserActivity : Activity() {
            titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
            view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
            view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
-            view.evaluateJavascript(HIGHLIGHT_STYLE_SCRIPT, null)
+           view.evaluateJavascript(HIGHLIGHT_STYLE_SCRIPT, null)
+           imageLightbox.injectClickScript(view)
             if (highlightBlockId.isNotEmpty()) {
                 view.evaluateJavascript(buildHighlightBlockScript(), null)
             }
