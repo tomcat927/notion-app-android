@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.ActivityNotFoundException
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -53,8 +54,8 @@ class MainActivity : FlutterActivity() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         // UI_HIDDEN 是每次退到后台的正常信号，交给生命周期日志；这里只记录内存压力。
-        if (level == ActivityManager.TRIM_MEMORY_UI_HIDDEN) return
-        if (level >= ActivityManager.TRIM_MEMORY_RUNNING_LOW) {
+        if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             writeNativeCrashLog(
                 applicationContext,
                 buildString {
@@ -67,25 +68,24 @@ class MainActivity : FlutterActivity() {
 
     private val mainThreadWatchHandler = Handler(Looper.getMainLooper())
     private var mainThreadWatchScheduledAt = 0L
-    private val mainThreadWatchRunnable = Runnable {
-        val now = SystemClock.elapsedRealtime()
-        val delayMs = now - mainThreadWatchScheduledAt
-        if (mainThreadWatchScheduledAt > 0 &&
-            delayMs > MAIN_THREAD_WATCH_DELAY_THRESHOLD_MS
-        ) {
-            writeNativeCrashLog(
-                applicationContext,
-                buildString {
-                    appendLine("source=mainThreadWatchdog")
-                    appendLine("delayMs=$delayMs")
-                },
-            )
+    private val mainThreadWatchRunnable: Runnable = object : Runnable {
+        override fun run() {
+            val now = SystemClock.elapsedRealtime()
+            val delayMs = now - mainThreadWatchScheduledAt
+            if (mainThreadWatchScheduledAt > 0 &&
+                delayMs > MAIN_THREAD_WATCH_DELAY_THRESHOLD_MS
+            ) {
+                writeNativeCrashLog(
+                    applicationContext,
+                    buildString {
+                        appendLine("source=mainThreadWatchdog")
+                        appendLine("delayMs=$delayMs")
+                    },
+                )
+            }
+            mainThreadWatchScheduledAt = now
+            mainThreadWatchHandler.postDelayed(this, MAIN_THREAD_WATCH_INTERVAL_MS)
         }
-        mainThreadWatchScheduledAt = now
-        mainThreadWatchHandler.postDelayed(
-            mainThreadWatchRunnable,
-            MAIN_THREAD_WATCH_INTERVAL_MS,
-        )
     }
 
     private fun startMainThreadWatchdog() {
