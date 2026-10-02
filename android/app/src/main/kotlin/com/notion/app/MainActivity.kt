@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.webkit.CookieManager
 import android.webkit.WebSettings
@@ -43,9 +44,56 @@ class MainActivity : FlutterActivity() {
         installCrashHandler()
         super.onCreate(savedInstanceState)
         writeHistoricalProcessExits()
+        startMainThreadWatchdog()
         if (intent?.getBooleanExtra("install_update", false) == true) {
             Handler(Looper.getMainLooper()).postDelayed({ installPendingUpdate() }, 1500)
         }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // UI_HIDDEN 是每次退到后台的正常信号，交给生命周期日志；这里只记录内存压力。
+        if (level == ActivityManager.TRIM_MEMORY_UI_HIDDEN) return
+        if (level >= ActivityManager.TRIM_MEMORY_RUNNING_LOW) {
+            writeNativeCrashLog(
+                applicationContext,
+                buildString {
+                    appendLine("source=trimMemory")
+                    appendLine("level=$level")
+                },
+            )
+        }
+    }
+
+    private val mainThreadWatchHandler = Handler(Looper.getMainLooper())
+    private var mainThreadWatchScheduledAt = 0L
+    private val mainThreadWatchRunnable = Runnable {
+        val now = SystemClock.elapsedRealtime()
+        val delayMs = now - mainThreadWatchScheduledAt
+        if (mainThreadWatchScheduledAt > 0 &&
+            delayMs > MAIN_THREAD_WATCH_DELAY_THRESHOLD_MS
+        ) {
+            writeNativeCrashLog(
+                applicationContext,
+                buildString {
+                    appendLine("source=mainThreadWatchdog")
+                    appendLine("delayMs=$delayMs")
+                },
+            )
+        }
+        mainThreadWatchScheduledAt = now
+        mainThreadWatchHandler.postDelayed(
+            mainThreadWatchRunnable,
+            MAIN_THREAD_WATCH_INTERVAL_MS,
+        )
+    }
+
+    private fun startMainThreadWatchdog() {
+        mainThreadWatchScheduledAt = SystemClock.elapsedRealtime()
+        mainThreadWatchHandler.postDelayed(
+            mainThreadWatchRunnable,
+            MAIN_THREAD_WATCH_INTERVAL_MS,
+        )
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -206,10 +254,19 @@ class MainActivity : FlutterActivity() {
 
     private fun shouldLogExitReason(reason: Int): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
-        return reason == ApplicationExitInfo.REASON_CRASH ||
-            reason == ApplicationExitInfo.REASON_CRASH_NATIVE ||
-            reason == ApplicationExitInfo.REASON_ANR ||
-            reason == ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE
+        return when (reason) {
+            ApplicationExitInfo.REASON_CRASH,
+            ApplicationExitInfo.REASON_CRASH_NATIVE,
+            ApplicationExitInfo.REASON_ANR,
+            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
+            ApplicationExitInfo.REASON_SIGNALED,
+            ApplicationExitInfo.REASON_LOW_MEMORY,
+            ApplicationExitInfo.REASON_USER_REQUESTED,
+            ApplicationExitInfo.REASON_USER_STOPPED,
+            ApplicationExitInfo.REASON_OTHER,
+            -> true
+            else -> false
+        }
     }
 
     private fun exitReasonLabel(reason: Int): String {
@@ -219,6 +276,11 @@ class MainActivity : FlutterActivity() {
             ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
             ApplicationExitInfo.REASON_ANR -> "ANR"
             ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "EXCESSIVE_RESOURCE_USAGE"
+            ApplicationExitInfo.REASON_SIGNALED -> "SIGNALED"
+            ApplicationExitInfo.REASON_LOW_MEMORY -> "LOW_MEMORY"
+            ApplicationExitInfo.REASON_USER_REQUESTED -> "USER_REQUESTED"
+            ApplicationExitInfo.REASON_USER_STOPPED -> "USER_STOPPED"
+            ApplicationExitInfo.REASON_OTHER -> "OTHER"
             else -> reason.toString()
         }
     }
@@ -521,6 +583,8 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val MAX_NATIVE_CRASH_LOG_BYTES = 256 * 1024
         private const val MAX_TRACE_CHARS = 40_000
+        private const val MAIN_THREAD_WATCH_INTERVAL_MS = 5_000L
+        private const val MAIN_THREAD_WATCH_DELAY_THRESHOLD_MS = 10_000L
         @Volatile
         private var crashHandlerInstalled = false
 

@@ -43,6 +43,7 @@ import java.io.ByteArrayInputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 class BrowserActivity : Activity() {
     private lateinit var titleView: TextView
@@ -79,6 +80,7 @@ class BrowserActivity : Activity() {
     }
 
     override fun onDestroy() {
+        writeBrowserLog("browser destroyed")
         idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
@@ -129,12 +131,14 @@ class BrowserActivity : Activity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        writeBrowserLog("browser to background, idle release in ${IDLE_RELEASE_DELAY_MS / 1000}s")
         idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
         idleReleaseHandler.postDelayed(idleReleaseRunnable, IDLE_RELEASE_DELAY_MS)
     }
 
     override fun onResume() {
         super.onResume()
+        writeBrowserLog("browser resumed")
         idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
     }
 
@@ -733,16 +737,19 @@ class BrowserActivity : Activity() {
     }
 
     private fun writeBrowserLog(message: String) {
-        try {
-            val file = File(filesDir, "notion_app_native_crash.log")
-            if (file.length() > MAX_BROWSER_LOG_BYTES) {
-                val content = file.readText()
-                file.writeText(content.substring(content.length / 2))
+        // 主线程卡住时同步写文件会丢日志，也加剧卡顿；统一投递到后台单线程执行。
+        logExecutor.execute {
+            try {
+                val file = File(filesDir, "notion_app_native_crash.log")
+                if (file.length() > MAX_BROWSER_LOG_BYTES) {
+                    val content = file.readText()
+                    file.writeText(content.substring(content.length / 2))
+                }
+                val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())
+                file.appendText("[$timestamp] [BrowserWebView]\n$message\n\n")
+            } catch (ignored: Exception) {
+                // Never fail because of diagnostics.
             }
-            val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())
-            file.appendText("[$timestamp] [BrowserWebView]\n$message\n\n")
-        } catch (ignored: Exception) {
-            // Never fail because of diagnostics.
         }
     }
 
@@ -757,6 +764,9 @@ class BrowserActivity : Activity() {
         const val EXTRA_SNIPPET = "snippet"
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
         private const val MAX_BROWSER_LOG_BYTES = 256 * 1024
+        private val logExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "browser-log")
+        }
         private const val MAX_AUTO_RECOVERS = 1
        private const val AUTO_RECOVER_WINDOW_MS = 5 * 60 * 1000L
         private const val IDLE_RELEASE_DELAY_MS = 5 * 60 * 1000L
