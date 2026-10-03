@@ -11,6 +11,7 @@ import android.graphics.Typeface
 import android.os.Build
 import android.os.Environment
 import android.os.Message
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.LruCache
 import android.view.Gravity
@@ -44,6 +45,18 @@ class ImageLightbox(private val activity: Activity) {
         fun openImage(url: String) {
             activity.runOnUiThread { show(url) }
         }
+
+        @JavascriptInterface
+        fun onSmallImage(url: String) {
+            activity.runOnUiThread { showSmallImageHint() }
+        }
+    }
+
+    private fun showSmallImageHint() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastSmallImageHintAt < SMALL_IMAGE_HINT_INTERVAL_MS) return
+        lastSmallImageHintAt = now
+        Toast.makeText(activity, "图片较小，可长按查看大图或保存", Toast.LENGTH_SHORT).show()
     }
 
     fun install(webView: WebView) {
@@ -327,10 +340,15 @@ class ImageLightbox(private val activity: Activity) {
     var target = event.target;
     if (!target || target.tagName !== 'IMG') return;
     if (target.closest && target.closest('a[href]')) return;
-    if (target.closest && target.closest('.notion-emoji')) return;
-    if (target.naturalWidth && target.naturalWidth < 40) return;
+    if (target.closest && target.closest('.notion-emoji, [class*="mention"]')) return;
     var src = target.currentSrc || target.src;
     if (!src || src.indexOf('data:') === 0) return;
+    if (target.naturalWidth && target.naturalWidth < 40) {
+      if (window.NotionImageLightbox && window.NotionImageLightbox.onSmallImage) {
+        window.NotionImageLightbox.onSmallImage(src);
+      }
+      return;
+    }
     if (window.NotionImageLightbox && window.NotionImageLightbox.openImage) {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -339,5 +357,8 @@ class ImageLightbox(private val activity: Activity) {
   }, true);
 })();
 """.trimIndent()
+
+        private const val SMALL_IMAGE_HINT_INTERVAL_MS = 3_000L
+        private var lastSmallImageHintAt = 0L
     }
 }
