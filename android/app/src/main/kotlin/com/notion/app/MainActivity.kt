@@ -2,9 +2,6 @@ package com.notion.app
 
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.ComponentCallbacks2
 import android.content.Context
@@ -26,10 +23,9 @@ import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
 import androidx.core.content.FileProvider
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.PrintWriter
@@ -117,6 +113,9 @@ class MainActivity : FlutterActivity() {
                         showUpdateNotification()
                         result.success(true)
                     }
+                    "enqueueUpdateDownload" -> enqueueUpdateDownload(call, result)
+                    "queryUpdateDownload" -> queryUpdateDownload(call, result)
+                    "processUpdateDownload" -> processUpdateDownload(call, result)
                     else -> result.notImplemented()
                 }
             }
@@ -498,33 +497,43 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun showUpdateNotification() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "update_notification",
-                "更新通知",
-                NotificationManager.IMPORTANCE_DEFAULT,
-            )
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
+        UpdateDownloadManager.showUpdateReadyNotification(this)
+    }
+
+    private fun enqueueUpdateDownload(call: MethodCall, result: MethodChannel.Result) {
+        val url = call.argument<String>("url")
+        val sha256 = call.argument<String>("sha256")
+        val title = call.argument<String>("title")
+        if (url.isNullOrBlank() || sha256.isNullOrBlank()) {
+            result.error("invalid_argument", "缺少下载参数", null)
+            return
         }
-        val installIntent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            putExtra("install_update", true)
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, installIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = NotificationCompat.Builder(this, "update_notification")
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Notion Lite 更新就绪")
-            .setContentText("点击安装新版本")
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .build()
         try {
-            NotificationManagerCompat.from(this).notify(1001, notification)
-        } catch (_: SecurityException) {}
+            result.success(
+                UpdateDownloadManager.enqueue(this, url, sha256, title ?: "Notion Lite 更新包"),
+            )
+        } catch (error: Exception) {
+            result.error("enqueue_failed", error.message ?: "无法启动系统下载", null)
+        }
+    }
+
+    private fun queryUpdateDownload(call: MethodCall, result: MethodChannel.Result) {
+        val id = (call.argument<Any?>("id") as? Number)?.toLong() ?: -1L
+        try {
+            result.success(UpdateDownloadManager.query(this, id))
+        } catch (error: Exception) {
+            result.error("query_failed", error.message ?: "查询下载状态失败", null)
+        }
+    }
+
+    private fun processUpdateDownload(call: MethodCall, result: MethodChannel.Result) {
+        val id = (call.argument<Any?>("id") as? Number)?.toLong() ?: -1L
+        try {
+            UpdateDownloadManager.processCompleted(this, id)
+            result.success(true)
+        } catch (error: Exception) {
+            result.error("process_failed", error.message ?: "处理下载完成失败", null)
+        }
     }
 
     private fun installPendingUpdate() {

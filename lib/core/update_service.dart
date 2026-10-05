@@ -61,6 +61,9 @@ class UpdateService {
   static const MethodChannel _installChannel = MethodChannel(
     'com.notion.app/updater',
   );
+  // DownloadManager.STATUS_SUCCESSFUL / STATUS_FAILED
+  static const int _dmStatusSuccessful = 8;
+  static const int _dmStatusFailed = 16;
 
   /// 直连开启时绕过系统代理（gh-proxy 可国内直连），关闭则走系统代理。
   static Future<http.Client> _updateClient({bool forceProxy = false}) async {
@@ -196,10 +199,7 @@ class UpdateService {
     // Check if APK already downloaded and valid — skip re-download
     if (await file.exists() && await file.length() > 0) {
       try {
-        final expectedChecksum = await _readChecksum([
-          info.checksumUrl,
-          info.fallbackChecksumUrl,
-        ]);
+        final expectedChecksum = await _readChecksumCached(info);
         if (expectedChecksum != null) {
           final actualChecksum = (await _sha256(file)).toLowerCase();
           if (actualChecksum == expectedChecksum.toLowerCase()) {
@@ -217,29 +217,89 @@ class UpdateService {
     }
 
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final direct = prefs.getBool(directUpdatePreferenceKey) ?? true;
+      if (direct) {
+        // 系统下载器：进程冻结/被杀不中断，后台完成后由原生侧校验落盘并通知。
+        try {
+          await _downloadViaSystemManager(info, onProgress);
+          return await _verifyDownloadedFile(file, info);
+        } catch (error) {
+          await AppLogger.log(
+            'Update',
+            'system download failed, fallback to in-app: $error',
+          );
+        }
+      }
       await _download(
         [info.downloadUrl, info.fallbackDownloadUrl],
         file,
         onProgress,
       );
-      final expectedChecksum = await _readChecksum([
-        info.checksumUrl,
-        info.fallbackChecksumUrl,
-      ]);
-      if (expectedChecksum == null) {
-        throw Exception('无法获取 SHA-256 校验值');
-      }
-
-      final actualChecksum = (await _sha256(file)).toLowerCase();
-      if (actualChecksum != expectedChecksum.toLowerCase()) {
-        if (await file.exists()) await file.delete();
-        throw Exception('SHA-256 校验失败');
-      }
-      return file;
+      return await _verifyDownloadedFile(file, info);
     } catch (error) {
       await AppLogger.log('Update', 'download/verify failed: $error');
       rethrow;
     }
+  }
+
+  /// 通过系统 DownloadManager 下载（外部文件中转），完成后由原生侧
+  /// 校验 SHA-256 并拷贝到内部规范路径；前台轮询进度与完成状态。
+  static Future<void> _downloadViaSystemManager(
+    UpdateInfo info,
+    void Function(double progress) onProgress,
+  ) async {
+    final expected = await _readChecksumCached(info);
+    if (expected == null) {
+      throw Exception('无法获取 SHA-256 校验值');
+    }
+    final id = await _installChannel.invokeMethod<int>('enqueueUpdateDownload', {
+      'url': info.downloadUrl,
+      'sha256': expected,
+      'title': 'Notion Lite ${info.displayVersion}',
+    });
+    if (id == null || id <= 0) {
+      throw Exception('系统下载器启动失败');
+    }
+    while (true) {
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      final result = await _installChannel
+          .invokeMethod<Map<dynamic, dynamic>>('queryUpdateDownload', {'id': id});
+      if (result == null) throw Exception('系统下载器查询失败');
+      if (result['ready'] == true) {
+        onProgress(1.0);
+        return;
+      }
+      final status = (result['status'] as num?)?.toInt() ?? 0;
+      final bytes = (result['bytes'] as num?)?.toInt() ?? 0;
+      final total = (result['total'] as num?)?.toInt() ?? 0;
+      if (total > 0) onProgress((bytes / total).clamp(0.0, 1.0));
+      if (status == _dmStatusFailed) {
+        throw Exception('系统下载器下载失败');
+      }
+      if (status == _dmStatusSuccessful) {
+        // 完成广播可能被冻结进程拦截：主动触发原生校验落盘。
+        await _installChannel.invokeMethod<dynamic>(
+          'processUpdateDownload',
+          {'id': id},
+        );
+      }
+    }
+  }
+
+  /// 校验已落盘的更新包；失败时删除文件并抛出。
+  static Future<File> _verifyDownloadedFile(File file, UpdateInfo info) async {
+    final expectedChecksum = await _readChecksumCached(info);
+    if (expectedChecksum == null) {
+      throw Exception('无法获取 SHA-256 校验值');
+    }
+
+    final actualChecksum = (await _sha256(file)).toLowerCase();
+    if (actualChecksum != expectedChecksum.toLowerCase()) {
+      if (await file.exists()) await file.delete();
+      throw Exception('SHA-256 校验失败');
+    }
+    return file;
   }
 
   static Future<void> showDownloadCompleteNotification() async {
@@ -263,13 +323,7 @@ class UpdateService {
     for (final url in urls) {
       try {
         final client = await _updateClient();
-        // Check if URL changed since last download — delete partial file if so
-        final prefs = await SharedPreferences.getInstance();
-        final lastUrl = prefs.getString('last_download_url');
-        if (lastUrl != null && lastUrl != url && await file.exists()) {
-          await file.delete();
-        }
-        await prefs.setString('last_download_url', url);
+        // 主备链接间切换不再删除半成品（丢断点）；跨版本错拼由最终 SHA-256 校验兜底。
         final request = http.Request('GET', Uri.parse(url));
         final existingBytes = await file.exists() ? await file.length() : 0;
         if (existingBytes > 0) {
@@ -314,6 +368,25 @@ class UpdateService {
       }
     }
     throw Exception(lastError);
+  }
+
+  // 校验值很小且同一 release 固定，下载前后、重试时避免重复拉取。
+  static String? _cachedChecksum;
+  static String? _cachedChecksumTag;
+
+  static Future<String?> _readChecksumCached(UpdateInfo info) async {
+    if (_cachedChecksum != null && _cachedChecksumTag == info.tagName) {
+      return _cachedChecksum;
+    }
+    final value = await _readChecksum([
+      info.checksumUrl,
+      info.fallbackChecksumUrl,
+    ]);
+    if (value != null) {
+      _cachedChecksum = value;
+      _cachedChecksumTag = info.tagName;
+    }
+    return value;
   }
 
   static Future<String?> _readChecksum(List<String> urls) async {
