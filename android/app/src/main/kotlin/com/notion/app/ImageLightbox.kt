@@ -37,22 +37,27 @@ import java.util.concurrent.Executors
 /**
  * 笔记页图片查看：注入脚本拦截内容图片的点击，交给原生全屏缩放查看器；
  * 长按图片提供"查看大图 / 保存图片"菜单。
+ *
+ * @param activityProvider 每次回调时解析当前浏览器 Activity；WebView 跨 Activity
+ * 复用后，本实例由 BrowserWebViewHolder 常驻持有，不能固定绑定某个 Activity。
  */
-class ImageLightbox(private val activity: Activity) {
+class ImageLightbox(private val activityProvider: () -> Activity?) {
 
     private inner class Bridge {
         @JavascriptInterface
         fun openImage(url: String) {
+            val activity = activityProvider() ?: return
             activity.runOnUiThread { show(url) }
         }
 
         @JavascriptInterface
         fun onSmallImage(url: String) {
-            activity.runOnUiThread { showSmallImageHint() }
+            val activity = activityProvider() ?: return
+            activity.runOnUiThread { showSmallImageHint(activity) }
         }
     }
 
-    private fun showSmallImageHint() {
+    private fun showSmallImageHint(activity: Activity) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastSmallImageHintAt < SMALL_IMAGE_HINT_INTERVAL_MS) return
         lastSmallImageHintAt = now
@@ -71,6 +76,7 @@ class ImageLightbox(private val activity: Activity) {
     }
 
     fun show(url: String) {
+        val activity = activityProvider() ?: return
         val cachedBytes = imageCache.get(url)
         val cookie = if (cachedBytes == null) readCookie(url) else null
 
@@ -99,7 +105,7 @@ class ImageLightbox(private val activity: Activity) {
             textSize = 20f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 12))
         }
         container.addView(
             closeButton,
@@ -107,7 +113,7 @@ class ImageLightbox(private val activity: Activity) {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.END,
-            ).apply { topMargin = dp(28) },
+            ).apply { topMargin = dp(activity, 28) },
         )
 
         val dialog = Dialog(activity)
@@ -144,6 +150,7 @@ class ImageLightbox(private val activity: Activity) {
     }
 
     fun save(url: String) {
+        val activity = activityProvider() ?: return
         val cachedBytes = imageCache.get(url)
         val cookie = if (cachedBytes == null) readCookie(url) else null
         ioExecutor.execute {
@@ -158,7 +165,7 @@ class ImageLightbox(private val activity: Activity) {
                     return@runOnUiThread
                 }
                 val saved = try {
-                    writeToStorage(bytes)
+                    writeToStorage(activity, bytes)
                 } catch (ignored: Exception) {
                     false
                 }
@@ -171,7 +178,8 @@ class ImageLightbox(private val activity: Activity) {
         }
     }
 
-    private fun handleLongPress(webView: WebView): Boolean {
+    internal fun handleLongPress(webView: WebView): Boolean {
+        val activity = activityProvider() ?: return false
         val hit = webView.hitTestResult
         val url = when (hit.type) {
             WebView.HitTestResult.IMAGE_TYPE -> hit.extra
@@ -195,7 +203,7 @@ class ImageLightbox(private val activity: Activity) {
         return true
     }
 
-    private fun writeToStorage(bytes: ByteArray): Boolean {
+    private fun writeToStorage(activity: Activity, bytes: ByteArray): Boolean {
         val imageType = detectImageType(bytes)
         val fileName = "notion-" +
             SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) +
@@ -305,7 +313,7 @@ class ImageLightbox(private val activity: Activity) {
         }
     }
 
-    private fun dp(value: Int): Int =
+    private fun dp(activity: Activity, value: Int): Int =
         (value * activity.resources.displayMetrics.density).toInt()
 
     private class ImageType(val mime: String, val extension: String)

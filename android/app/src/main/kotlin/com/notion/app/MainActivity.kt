@@ -56,6 +56,8 @@ class MainActivity : FlutterActivity() {
         // UI_HIDDEN 是每次退到后台的正常信号，交给生命周期日志；这里只记录内存压力。
         if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            // 浏览器 WebView 未挂载时可直接回收，挂载中（用户正在看笔记）则保留。
+            BrowserWebViewHolder.onMemoryPressure()
             writeNativeCrashLog(
                 applicationContext,
                 buildString {

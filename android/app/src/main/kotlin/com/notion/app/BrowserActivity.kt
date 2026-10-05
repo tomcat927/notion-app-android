@@ -12,24 +12,12 @@ import android.net.Uri
 import android.os.Build
 import android.util.TypedValue
 import android.os.Bundle
-import android.os.SystemClock
-import android.os.Handler
-import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.CookieManager
-import android.webkit.ConsoleMessage
-import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
-import android.webkit.JavascriptInterface
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -38,12 +26,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import java.io.File
-import java.io.ByteArrayInputStream
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import java.util.concurrent.Executors
 
 class BrowserActivity : Activity() {
     private lateinit var titleView: TextView
@@ -57,14 +40,6 @@ class BrowserActivity : Activity() {
    private var elementInspectorActive: Boolean = false
     private var highlightBlockId: String = ""
     private var highlightSnippet: String = ""
-   private val rendererGoneTimestamps = mutableListOf<Long>()
-   private var rendererGoneCount = 0
-    private val idleReleaseHandler = Handler(Looper.getMainLooper())
-    private val imageLightbox: ImageLightbox by lazy { ImageLightbox(this) }
-    private val idleReleaseRunnable = Runnable {
-        writeBrowserLog("idle release timeout, finishing activity")
-        finish()
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,17 +51,16 @@ class BrowserActivity : Activity() {
         highlightSnippet = intent.getStringExtra(EXTRA_SNIPPET).orEmpty()
        title = intent.getStringExtra(EXTRA_TITLE).takeUnless { it.isNullOrBlank() } ?: "Notion"
         setContentView(createContentView())
-        createWebView()
+        attachWebView()
         loadInitialPage()
     }
 
     override fun onDestroy() {
         writeBrowserLog("browser destroyed")
-        idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
         elementInspectorActive = false
-        destroyWebView()
+        detachWebView()
         super.onDestroy()
     }
 
@@ -97,16 +71,15 @@ class BrowserActivity : Activity() {
             currentWebView.goBack()
             return
        }
-        val intent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        }
-        startActivity(intent)
+        // 单 task 内嵌浏览器：返回即销毁页面，WebView 由 BrowserWebViewHolder 留用。
+        finish()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
+        BrowserWebViewHolder.cancelIdleRelease()
+        openExternalLinksInApp = intent.getBooleanExtra(EXTRA_OPEN_EXTERNAL_LINKS_IN_APP, false)
         val newPageId = intent.getStringExtra(EXTRA_PAGE_ID)?.orEmpty()?.trim()?.replace("-", "")
         if (newPageId.isNullOrEmpty()) return
         highlightBlockId = intent.getStringExtra(EXTRA_BLOCK_ID).orEmpty()
@@ -125,26 +98,28 @@ class BrowserActivity : Activity() {
             currentWebView.loadUrl(url)
         } else {
             writeBrowserLog("webview null, recreating: $newPageId")
-            createWebView()
+            attachWebView()
             loadInitialPage()
         }
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        writeBrowserLog("browser to background, idle release in ${IDLE_RELEASE_DELAY_MS / 1000}s")
-        idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
-        idleReleaseHandler.postDelayed(idleReleaseRunnable, IDLE_RELEASE_DELAY_MS)
+        writeBrowserLog(
+            "browser to background, idle release in ${BrowserWebViewHolder.IDLE_RELEASE_DELAY_MS / 1000}s",
+        )
+        BrowserWebViewHolder.startIdleRelease()
     }
 
     override fun onResume() {
         super.onResume()
         writeBrowserLog("browser resumed")
-        idleReleaseHandler.removeCallbacks(idleReleaseRunnable)
+        BrowserWebViewHolder.cancelIdleRelease()
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        BrowserWebViewHolder.cancelIdleRelease()
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
             val result = if (resultCode == RESULT_OK) {
                 WebChromeClient.FileChooserParams.parseResult(resultCode, data)
@@ -305,8 +280,8 @@ class BrowserActivity : Activity() {
         }
     }
 
-    private fun createWebView() {
-        val view = WebView(this)
+    private fun attachWebView() {
+        val view = BrowserWebViewHolder.obtain(this)
         webView = view
         content.removeAllViews()
         content.addView(
@@ -316,111 +291,41 @@ class BrowserActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
-
-        view.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            databaseEnabled = true
-            loadWithOverviewMode = true
-            useWideViewPort = true
-            builtInZoomControls = true
-            displayZoomControls = false
-           mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
-           userAgentString = MOBILE_USER_AGENT
-        }
-       view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
-       view.addJavascriptInterface(OutlineBridge(), "NotionOutline")
-        view.addJavascriptInterface(InPageSearchBridge(), "NotionInPageSearchNative")
-       imageLightbox.install(view)
-       CookieManager.getInstance().setAcceptCookie(true)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
-        }
-        view.webViewClient = createWebViewClient()
-        view.webChromeClient = createWebChromeClient()
     }
 
-    private fun createWebViewClient(): WebViewClient = object : WebViewClient() {
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !request.isForMainFrame) {
-                return false
-            }
-            return shouldOverrideNavigation(request.url)
+    private fun detachWebView() {
+        BrowserWebViewHolder.detach(this)
+        webView = null
+    }
+
+    /** WebViewClient 已移至 BrowserWebViewHolder，页面事件经此回调路由到当前 Activity。 */
+    internal fun onBrowserPageFinished(view: WebView, url: String) {
+        titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
+        view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
+        view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
+        view.evaluateJavascript(HIGHLIGHT_STYLE_SCRIPT, null)
+        BrowserWebViewHolder.injectImageClickScript(view)
+        if (highlightBlockId.isNotEmpty()) {
+            view.evaluateJavascript(buildHighlightBlockScript(), null)
         }
-
-        @Deprecated("Deprecated in Java")
-        override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-           return shouldOverrideNavigation(Uri.parse(url))
-       }
-
-        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-            val url = request.url?.toString() ?: return null
-            if (url.contains("api.amplitude.com") ||
-                url.contains("api.statsig.com") ||
-                url.contains("featuregates.org") ||
-                url.contains("prod.web-sdk.amplitude.com")
-            ) {
-                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-            }
-            return null
-        }
-
-       override fun onPageFinished(view: WebView, url: String) {
-           titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
-           view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
-           view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
-           view.evaluateJavascript(HIGHLIGHT_STYLE_SCRIPT, null)
-           imageLightbox.injectClickScript(view)
-            if (highlightBlockId.isNotEmpty()) {
-                view.evaluateJavascript(buildHighlightBlockScript(), null)
-            }
-           if (elementInspectorActive) {
-                installElementInspector()
-            }
-        }
-
-        override fun onReceivedError(
-            view: WebView,
-            request: WebResourceRequest,
-            error: WebResourceError,
-        ) {
-            if (request.isForMainFrame) {
-                writeBrowserLog("main frame error: ${error.errorCode} ${error.description}")
-            }
-        }
-
-        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-            val didCrash = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                detail.didCrash()
-            } else {
-                false
-            }
-            writeBrowserLog("WebView renderer gone: didCrash=$didCrash priorityAtExit=${rendererPriority(detail)}")
-            destroyWebView(clearPage = false)
-            if (canAutoRecoverRenderer()) {
-                writeBrowserLog("renderer auto-recover: attempt=$rendererGoneCount")
-                recreateWebView()
-                Toast.makeText(this@BrowserActivity, "页面已自动恢复", Toast.LENGTH_SHORT).show()
-            } else {
-                showRendererGoneView(didCrash)
-            }
-            return true
+        if (elementInspectorActive) {
+            installElementInspector()
         }
     }
 
-    private fun canAutoRecoverRenderer(): Boolean {
-        val now = SystemClock.elapsedRealtime()
-        rendererGoneTimestamps.removeAll { now - it > AUTO_RECOVER_WINDOW_MS }
-        rendererGoneCount = rendererGoneTimestamps.size
-        return rendererGoneCount < MAX_AUTO_RECOVERS
+    internal fun onBrowserProgress(newProgress: Int) {
+        progressBar.progress = newProgress
+        progressBar.visibility = if (newProgress >= 100) {
+            View.GONE
+        } else {
+            View.VISIBLE
+        }
     }
 
-    private fun recreateWebView() {
+    internal fun onRendererAutoRecover() {
         elementInspectorActive = false
-        rendererGoneTimestamps.add(SystemClock.elapsedRealtime())
-        rendererGoneCount = rendererGoneTimestamps.size
-        createWebView()
+        Toast.makeText(this, "页面已自动恢复", Toast.LENGTH_SHORT).show()
+        attachWebView()
         loadInitialPage()
     }
 
@@ -496,63 +401,27 @@ class BrowserActivity : Activity() {
         """.trimIndent()
     }
 
-    private inner class OutlineBridge {
-        @JavascriptInterface
-        fun setVisible(visible: Boolean) {
-            runOnUiThread { outlineButton.visibility = if (visible) View.VISIBLE else View.GONE }
+    internal fun setOutlineVisible(visible: Boolean) {
+        outlineButton.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    internal fun onShowFileChooser(
+        filePathCallback: ValueCallback<Array<Uri>>,
+        fileChooserParams: WebChromeClient.FileChooserParams,
+    ): Boolean {
+        fileChooserCallback?.onReceiveValue(null)
+        fileChooserCallback = filePathCallback
+        return try {
+            startActivityForResult(fileChooserParams.createIntent(), FILE_CHOOSER_REQUEST_CODE)
+            true
+        } catch (_: ActivityNotFoundException) {
+            fileChooserCallback = null
+            Toast.makeText(this, "没有可用的文件选择器", Toast.LENGTH_SHORT).show()
+            false
         }
     }
 
-    private inner class InPageSearchBridge {
-        @JavascriptInterface
-        fun log(message: String) {
-            writeBrowserLog("in-page search: $message")
-        }
-    }
-
-    private fun createWebChromeClient(): WebChromeClient = object : WebChromeClient() {
-        override fun onProgressChanged(view: WebView, newProgress: Int) {
-            progressBar.progress = newProgress
-            progressBar.visibility = if (newProgress >= 100) {
-                android.view.View.GONE
-            } else {
-                android.view.View.VISIBLE
-            }
-        }
-
-        override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
-            when (consoleMessage.messageLevel()) {
-                ConsoleMessage.MessageLevel.ERROR -> writeBrowserLog(
-                    "js error: ${consoleMessage.message()} " +
-                        "(${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})",
-                )
-                ConsoleMessage.MessageLevel.WARNING -> writeBrowserLog(
-                    "js warn: ${consoleMessage.message()}",
-                )
-                else -> Unit
-            }
-            return true
-        }
-
-        override fun onShowFileChooser(
-            webView: WebView,
-            filePathCallback: ValueCallback<Array<Uri>>,
-            fileChooserParams: WebChromeClient.FileChooserParams,
-        ): Boolean {
-            fileChooserCallback?.onReceiveValue(null)
-            fileChooserCallback = filePathCallback
-            return try {
-                startActivityForResult(fileChooserParams.createIntent(), FILE_CHOOSER_REQUEST_CODE)
-                true
-            } catch (_: ActivityNotFoundException) {
-                fileChooserCallback = null
-                Toast.makeText(this@BrowserActivity, "没有可用的文件选择器", Toast.LENGTH_SHORT).show()
-                false
-            }
-        }
-    }
-
-    private fun shouldOverrideNavigation(uri: Uri): Boolean {
+    internal fun shouldOverrideNavigation(uri: Uri): Boolean {
         if (isNotionUri(uri)) return false
         if (openExternalLinksInApp && isWebUri(uri)) {
             writeBrowserLog("open external web link in app: $uri")
@@ -657,14 +526,9 @@ class BrowserActivity : Activity() {
         dialog.show()
     }
 
-    private inner class ElementInspectorBridge {
-        @JavascriptInterface
-        fun postMessage(payload: String) {
-            runOnUiThread {
-                stopElementInspector()
-                showInspectedElement(payload)
-            }
-        }
+    internal fun onInspectedElement(payload: String) {
+        elementInspectorActive = false
+        showInspectedElement(payload)
     }
 
     private fun loadInitialPage() {
@@ -682,7 +546,7 @@ class BrowserActivity : Activity() {
         webView?.loadUrl(url)
     }
 
-    private fun showRendererGoneView(didCrash: Boolean) {
+    internal fun onRendererGoneView(didCrash: Boolean) {
         showErrorView(
             if (didCrash) {
                 "Notion WebView 渲染进程已崩溃，已拦截系统杀 App。"
@@ -709,51 +573,8 @@ class BrowserActivity : Activity() {
         )
     }
 
-    private fun destroyWebView(clearPage: Boolean = true) {
-        val view = webView ?: return
-        webView = null
-        try {
-            content.removeView(view)
-            view.stopLoading()
-            view.webChromeClient = null
-            view.webViewClient = WebViewClient()
-            if (clearPage) {
-                view.loadUrl("about:blank")
-            }
-            view.removeAllViews()
-            view.destroy()
-        } catch (ignored: Exception) {
-            // Best-effort cleanup.
-        }
-    }
-
-    private fun rendererPriority(detail: RenderProcessGoneDetail): Int? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                detail.rendererPriorityAtExit()
-            } catch (_: Exception) {
-                null
-            }
-        } else {
-            null
-        }
-    }
-
     private fun writeBrowserLog(message: String) {
-        // 主线程卡住时同步写文件会丢日志，也加剧卡顿；统一投递到后台单线程执行。
-        logExecutor.execute {
-            try {
-                val file = File(filesDir, "notion_app_native_crash.log")
-                if (file.length() > MAX_BROWSER_LOG_BYTES) {
-                    val content = file.readText()
-                    file.writeText(content.substring(content.length / 2))
-                }
-                val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())
-                file.appendText("[$timestamp] [BrowserWebView]\n$message\n\n")
-            } catch (ignored: Exception) {
-                // Never fail because of diagnostics.
-            }
-        }
+        BrowserWebViewHolder.writeBrowserLog(message)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -766,16 +587,6 @@ class BrowserActivity : Activity() {
         const val EXTRA_BLOCK_ID = "blockId"
         const val EXTRA_SNIPPET = "snippet"
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
-        private const val MAX_BROWSER_LOG_BYTES = 256 * 1024
-        private val logExecutor = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "browser-log")
-        }
-        private const val MAX_AUTO_RECOVERS = 1
-       private const val AUTO_RECOVER_WINDOW_MS = 5 * 60 * 1000L
-        private const val IDLE_RELEASE_DELAY_MS = 5 * 60 * 1000L
-        private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Chrome/141.0.0.0 Mobile Safari/537.36"
 
         private const val HIDE_NOTION_FLOATERS_SCRIPT = """
 (() => {
