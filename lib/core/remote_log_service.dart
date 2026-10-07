@@ -84,6 +84,8 @@ class RemoteLogService {
     await prefs.setString(_targetPathKey, normalizedTargetPath);
     if (password.isNotEmpty) {
       await _secureStorage.write(key: _passwordKey, value: password);
+    } else {
+      await _secureStorage.delete(key: _passwordKey);
     }
     await _secureStorage.delete(key: _tokenKey);
   }
@@ -97,22 +99,23 @@ class RemoteLogService {
     return (await _secureStorage.read(key: _passwordKey))?.isNotEmpty == true;
   }
 
+  static Future<String> savedPassword() async {
+    return await _secureStorage.read(key: _passwordKey) ?? '';
+  }
+
   static Future<void> testConnection({
     required String baseUrl,
     required String username,
     required String password,
   }) async {
     final normalizedBaseUrl = _normalizeBaseUrl(baseUrl);
-    final effectivePassword = password.isNotEmpty
-        ? password
-        : await _secureStorage.read(key: _passwordKey) ?? '';
-    if (username.trim().isEmpty || effectivePassword.isEmpty) {
+    if (username.trim().isEmpty || password.isEmpty) {
       throw const FormatException('请填写 OpenList 用户名和密码');
     }
     await _login(
       baseUrl: normalizedBaseUrl,
       username: username.trim(),
-      password: effectivePassword,
+      password: password,
     );
   }
 

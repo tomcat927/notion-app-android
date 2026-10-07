@@ -166,14 +166,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _showRemoteLogSettings() async {
     final config = _remoteLogConfig ?? await RemoteLogService.loadConfig();
+    final savedPassword = await RemoteLogService.savedPassword();
     if (!mounted) return;
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     final baseUrlController = TextEditingController(text: config.baseUrl);
     final usernameController = TextEditingController(text: config.username);
-    final passwordController = TextEditingController();
+    final passwordController = TextEditingController(text: savedPassword);
     final targetPathController = TextEditingController(text: config.targetPath);
     var enabled = config.enabled;
+    var showPassword = false;
     var busy = false;
 
     await showDialog<void>(
@@ -211,10 +213,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 TextField(
                   controller: passwordController,
                   enabled: !busy,
-                  obscureText: true,
-                  decoration: const InputDecoration(
+                  obscureText: !showPassword,
+                  decoration: InputDecoration(
                     labelText: '密码',
-                    hintText: '留空则保留已保存密码',
+                    hintText: savedPassword.isEmpty ? '尚未保存密码' : null,
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        showPassword
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                      ),
+                      onPressed: () =>
+                          setDialogState(() => showPassword = !showPassword),
+                    ),
                   ),
                 ),
                 TextField(
