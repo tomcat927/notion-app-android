@@ -73,12 +73,37 @@ class BrowserActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         val currentWebView = webView
-        if (currentWebView != null && currentWebView.canGoBack()) {
+        val canGoBack = currentWebView?.canGoBack() == true
+        val backUrl = previousHistoryUrl(currentWebView, canGoBack)
+        val action = when {
+            currentWebView == null -> "finish(webview=null)"
+            isPageLoadPending -> "finish(pendingLoad)"
+            canGoBack -> "goBack"
+            else -> "finish"
+        }
+        writeBrowserLog(
+            "back pressed: action=$action canGoBack=$canGoBack " +
+                "pending=$isPageLoadPending loadingPageId=$loadingPageId " +
+                "currentUrl=${currentWebView?.url} backUrl=$backUrl",
+        )
+        // 新笔记尚未加载完时，历史里的上一页属于上一篇笔记，不能 goBack 过去。
+        if (currentWebView != null && !isPageLoadPending && canGoBack) {
             currentWebView.goBack()
             return
-       }
+        }
         // 单 task 内嵌浏览器：返回即销毁页面，WebView 由 BrowserWebViewHolder 留用。
         finish()
+    }
+
+    private fun previousHistoryUrl(view: WebView?, canGoBack: Boolean): String? {
+        if (view == null || !canGoBack) return null
+        return try {
+            val list = view.copyBackForwardList()
+            val index = list.currentIndex
+            if (index > 0) list.getItemAtIndex(index - 1)?.url else null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -102,7 +127,8 @@ class BrowserActivity : Activity() {
             writeBrowserLog("reuse webview: pageId=$newPageId title=$newTitle blockId=$highlightBlockId")
             showPageLoading(newPageId)
             currentWebView.stopLoading()
-            currentWebView.clearHistory()
+            // 此处不调用 clearHistory()：目标笔记尚未提交，清历史只会保留上一篇笔记。
+            // 等目标笔记加载完成后再清（见 onBrowserPageFinished）。
             currentWebView.loadUrl(url)
         } else {
             writeBrowserLog("webview null, recreating: $newPageId")
@@ -374,6 +400,10 @@ class BrowserActivity : Activity() {
                 return
             }
             isPageLoadPending = false
+            // 目标笔记已提交，清掉复用 WebView 里上一篇笔记留下的历史，
+            // 让当前笔记成为返回栈根节点；笔记内部后续跳转仍会正常产生历史。
+            view.clearHistory()
+            writeBrowserLog("target page committed, history cleared: $url")
             browserLoadingOverlay.visibility = View.GONE
             progressBar.visibility = View.GONE
         }
