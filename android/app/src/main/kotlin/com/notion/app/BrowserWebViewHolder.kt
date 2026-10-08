@@ -201,6 +201,11 @@ internal object BrowserWebViewHolder {
         ) {
             if (request.isForMainFrame) {
                 writeBrowserLog("main frame error: ${error.errorCode} ${error.description}")
+                currentActivity?.onBrowserPageError(
+                    view,
+                    request.url.toString(),
+                    error.description.toString(),
+                )
             }
         }
 

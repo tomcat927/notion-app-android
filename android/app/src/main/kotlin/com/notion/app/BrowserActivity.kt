@@ -33,7 +33,13 @@ class BrowserActivity : Activity() {
     private lateinit var progressBar: ProgressBar
     private lateinit var content: LinearLayout
     private lateinit var outlineButton: Button
+    private lateinit var browserLoadingOverlay: FrameLayout
+    private lateinit var browserLoadingSpinner: ProgressBar
+    private lateinit var browserLoadingMessage: TextView
+    private lateinit var browserLoadingRetryButton: Button
     private var webView: WebView? = null
+    private var loadingPageId: String = ""
+    private var isPageLoadPending: Boolean = false
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var openExternalLinksInApp: Boolean = false
     private var showElementInspectorToolbar: Boolean = false
@@ -94,6 +100,8 @@ class BrowserActivity : Activity() {
         if (currentWebView != null) {
             val url = "https://www.notion.so/$newPageId"
             writeBrowserLog("reuse webview: pageId=$newPageId title=$newTitle blockId=$highlightBlockId")
+            showPageLoading(newPageId)
+            currentWebView.stopLoading()
             currentWebView.clearHistory()
             currentWebView.loadUrl(url)
         } else {
@@ -244,6 +252,65 @@ class BrowserActivity : Activity() {
                 setMargins(dp(12), dp(12), dp(16), dp(20))
             },
         )
+
+        browserLoadingSpinner = ProgressBar(this).apply {
+            isIndeterminate = true
+        }
+        browserLoadingMessage = TextView(this).apply {
+            text = "正在加载笔记…"
+            textSize = 15f
+            setTextColor(0xFF4B5563.toInt())
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(12), dp(16), dp(8))
+        }
+        browserLoadingRetryButton = Button(this).apply {
+            text = "重试"
+            visibility = View.GONE
+            setOnClickListener { retryPendingPage() }
+        }
+        val loadingContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            addView(
+                browserLoadingSpinner,
+                LinearLayout.LayoutParams(dp(36), dp(36)),
+            )
+            addView(
+                browserLoadingMessage,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            addView(
+                browserLoadingRetryButton,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        browserLoadingOverlay = FrameLayout(this).apply {
+            setBackgroundColor(0xFFF7F8FA.toInt())
+            isClickable = true
+            isFocusable = true
+            visibility = View.GONE
+            addView(
+                loadingContent,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER,
+                ),
+            )
+        }
+        browserContainer.addView(
+            browserLoadingOverlay,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
         root.addView(
             browserContainer,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
@@ -300,6 +367,17 @@ class BrowserActivity : Activity() {
 
     /** WebViewClient 已移至 BrowserWebViewHolder，页面事件经此回调路由到当前 Activity。 */
     internal fun onBrowserPageFinished(view: WebView, url: String) {
+        if (view !== webView) return
+        if (isPageLoadPending) {
+            if (!urlMatchesLoadingPage(url)) {
+                writeBrowserLog("ignore stale page finish while loading $loadingPageId: $url")
+                return
+            }
+            isPageLoadPending = false
+            browserLoadingOverlay.visibility = View.GONE
+            progressBar.visibility = View.GONE
+        }
+
         titleView.text = view.title?.takeIf { it.isNotBlank() } ?: title
         view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
         view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
@@ -311,6 +389,15 @@ class BrowserActivity : Activity() {
         if (elementInspectorActive) {
             installElementInspector()
         }
+    }
+
+    internal fun onBrowserPageError(view: WebView, url: String, description: String) {
+        if (view !== webView || !isPageLoadPending || !urlMatchesLoadingPage(url)) return
+        writeBrowserLog("target page load failed: $loadingPageId url=$url error=$description")
+        browserLoadingSpinner.visibility = View.GONE
+        browserLoadingMessage.text = "笔记加载失败，请检查网络后重试"
+        browserLoadingRetryButton.visibility = View.VISIBLE
+        progressBar.visibility = View.GONE
     }
 
     internal fun onBrowserProgress(newProgress: Int) {
@@ -531,6 +618,40 @@ class BrowserActivity : Activity() {
         showInspectedElement(payload)
     }
 
+    private fun showPageLoading(pageId: String) {
+        val normalizedPageId = pageId.trim().replace("-", "").lowercase(Locale.US)
+        if (normalizedPageId.isEmpty()) return
+
+        loadingPageId = normalizedPageId
+        isPageLoadPending = true
+        browserLoadingMessage.text = "正在加载笔记…"
+        browserLoadingSpinner.visibility = View.VISIBLE
+        browserLoadingRetryButton.visibility = View.GONE
+        browserLoadingOverlay.visibility = View.VISIBLE
+        progressBar.progress = 0
+        progressBar.visibility = View.VISIBLE
+    }
+
+    private fun urlMatchesLoadingPage(url: String): Boolean {
+        if (loadingPageId.isEmpty()) return false
+        return try {
+            Uri.parse(url).pathSegments.any { segment ->
+                segment.replace("-", "").lowercase(Locale.US).contains(loadingPageId)
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun retryPendingPage() {
+        val pageId = loadingPageId
+        val currentWebView = webView
+        if (pageId.isEmpty() || currentWebView == null) return
+        showPageLoading(pageId)
+        currentWebView.stopLoading()
+        currentWebView.loadUrl("https://www.notion.so/$pageId")
+    }
+
     private fun loadInitialPage() {
         val pageId = intent.getStringExtra(EXTRA_PAGE_ID).orEmpty().trim().replace("-", "")
         if (pageId.isEmpty()) {
@@ -538,6 +659,7 @@ class BrowserActivity : Activity() {
             return
         }
         val url = "https://www.notion.so/$pageId"
+        showPageLoading(pageId)
         writeBrowserLog(
             "open page: $pageId url=$url " +
                 "openExternalLinksInApp=$openExternalLinksInApp " +
@@ -557,6 +679,9 @@ class BrowserActivity : Activity() {
     }
 
     private fun showErrorView(message: String) {
+        isPageLoadPending = false
+        browserLoadingOverlay.visibility = View.GONE
+        progressBar.visibility = View.GONE
         content.removeAllViews()
         content.addView(
             TextView(this).apply {
