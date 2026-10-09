@@ -141,16 +141,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_loadBrowserPreferences());
     unawaited(_loadMonthGroupPreference());
     unawaited(_loadRemoteLogConfig());
-    unawaited(_prewarmWebSession());
+    // 先启动预热 WebView（加载 notion.so 以产生 cookie），再读 cookie。
+    // 修复冷启动竞态：原先两者并发，刷新常早于 cookie 写入 → token_v2 missing。
     unawaited(NativeBrowser.prewarmWebView());
+    unawaited(_prewarmWebSession());
   }
 
   Future<void> _prewarmWebSession() async {
     final session = NotionWebSession.instance;
     await session.loadFromStorage();
-    if (!session.isReady) {
-      unawaited(session.refreshFromCookieManager());
-    }
+    if (session.isReady) return;
+    // cookie 由上方 prewarmWebView 加载 notion.so 后写入 CookieManager。
+    // prewarmWebView 只是触发 loadUrl，不等待加载完成，故这里固定等 3s
+    // 让页面加载并把 cookie 落盘，再读，避免拿到空结果（token_v2 missing）。
+    // 幂等：Kotlin 侧 prewarmWebView 有 `if (prewarmWebView != null) return` 保护。
+    await Future<void>.delayed(const Duration(seconds: 3));
+    if (session.isReady) return;
+    // 若 3s 仍不够（弱网/首次登录），再走一次内部带 401/403 自动重刷的完整刷新
+    await session.refreshFromCookieManager();
   }
 
   Future<void> _loadRemoteLogConfig() async {

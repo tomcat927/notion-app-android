@@ -412,6 +412,9 @@ class BrowserActivity : Activity() {
         view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
         view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
         view.evaluateJavascript(HIGHLIGHT_STYLE_SCRIPT, null)
+        // 页面加载性能瀑布采集（延迟 5s 采样，结果经 console 回写原生日志）
+        view.evaluateJavascript("window.__notionPerfCollected = false;", null)
+        view.evaluateJavascript(PERF_COLLECT_SCRIPT, null)
         BrowserWebViewHolder.injectImageClickScript(view)
         if (highlightBlockId.isNotEmpty()) {
             view.evaluateJavascript(buildHighlightBlockScript(), null)
@@ -1143,6 +1146,96 @@ class BrowserActivity : Activity() {
       panel.remove();
     }
   };
+})();
+"""
+
+        /**
+         * 页面加载性能瀑布采集。
+         *
+         * 在页面稳定后（onPageFinished 后延迟 5s）读取 Performance Resource Timing，
+         * 汇总每个域名的请求数 / 总字节 / 总耗时，并把最慢的 10 个资源打印到 console，
+         * 由 onConsoleMessage 识别 `NOTION_PERF:` 前缀后写入原生日志。
+         *
+         * 目的：定位「哪个域名 / 哪个资源最拖慢加载」，用于指导 Clash 分流与缓存优化。
+         * 零副作用：只读 performance API，不改 DOM。
+         */
+        private const val PERF_COLLECT_SCRIPT = """
+(() => {
+  if (window.__notionPerfCollected) return;
+  window.__notionPerfCollected = true;
+
+  const emit = (payload) => {
+    try { console.log('NOTION_PERF:' + JSON.stringify(payload)); } catch (e) {}
+  };
+
+  const run = () => {
+    try {
+      const entries = performance.getEntriesByType('resource') || [];
+      const nav = performance.getEntriesByType('navigation')[0] || {};
+
+      const byDomain = {};
+      let totalBytes = 0;
+      let totalDuration = 0;
+
+      entries.forEach((e) => {
+        let host = '';
+        try { host = new URL(e.name).hostname; } catch (err) { return; }
+        if (!byDomain[host]) {
+          byDomain[host] = { count: 0, bytes: 0, duration: 0 };
+        }
+        const size = e.transferSize || e.encodedBodySize || 0;
+        byDomain[host].count += 1;
+        byDomain[host].bytes += size;
+        byDomain[host].duration += e.duration || 0;
+        totalBytes += size;
+        totalDuration += e.duration || 0;
+      });
+
+      const domainList = Object.keys(byDomain)
+        .map((host) => ({ host, ...byDomain[host] }))
+        .sort((a, b) => b.bytes - a.bytes)
+        .slice(0, 15);
+
+      const slowest = entries
+        .filter((e) => e.duration > 0)
+        .sort((a, b) => b.duration - a.duration)
+        .slice(0, 10)
+        .map((e) => {
+          let host = '';
+          try { host = new URL(e.name).hostname; } catch (err) { host = '?'; }
+          const short = e.name.split('?')[0].split('/').pop() || e.name;
+          return {
+            host: host,
+            file: short.slice(0, 60),
+            ms: Math.round(e.duration),
+            kb: Math.round((e.transferSize || e.encodedBodySize || 0) / 1024)
+          };
+        });
+
+      emit({
+        nav: {
+          domContentLoaded: Math.round(nav.domContentLoadedEventEnd || 0),
+          loadComplete: Math.round(nav.loadEventEnd || 0),
+          ttfb: Math.round(nav.responseStart || 0)
+        },
+        resourceCount: entries.length,
+        totalKB: Math.round(totalBytes / 1024),
+        totalMs: Math.round(totalDuration),
+        domains: domainList.map((d) => ({
+          host: d.host,
+          n: d.count,
+          kb: Math.round(d.bytes / 1024),
+          ms: Math.round(d.duration)
+        })),
+        slowest: slowest
+      });
+    } catch (err) {
+      emit({ error: String(err) });
+    }
+  };
+
+  // 等 5s 让懒加载资源也进来，再采样一次
+  setTimeout(run, 5000);
 })();
 """
     }

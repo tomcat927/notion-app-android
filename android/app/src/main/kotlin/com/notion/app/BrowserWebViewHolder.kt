@@ -247,13 +247,19 @@ internal object BrowserWebViewHolder {
         }
 
         override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+            val message = consoleMessage.message()
+            // 性能瀑布采集回传：识别专用前缀，先于日志级别判断
+            if (message.startsWith("NOTION_PERF:")) {
+                writeBrowserLog("page perf: ${message.removePrefix("NOTION_PERF:")}")
+                return true
+            }
             when (consoleMessage.messageLevel()) {
                 ConsoleMessage.MessageLevel.ERROR -> writeBrowserLog(
-                    "js error: ${consoleMessage.message()} " +
+                    "js error: $message " +
                         "(${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})",
                 )
                 ConsoleMessage.MessageLevel.WARNING -> writeBrowserLog(
-                    "js warn: ${consoleMessage.message()}",
+                    "js warn: $message",
                 )
                 else -> Unit
             }

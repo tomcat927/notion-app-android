@@ -1,6 +1,6 @@
 # Clash 推荐规则
 
-本文说明 Notion Lite 在 Clash 中的推荐分流规则。App 的 API 请求、内嵌 Notion 编辑器和热更新请求都会使用 Android 系统代理，因此因此流量会先进入 Clash，再由规则决定走哪个策略组。
+本文说明 Notion Lite 在 Clash 中的推荐分流规则。App 的 API 请求、内嵌 Notion 编辑器和热更新请求都会使用 Android 系统代理，因此流量会先进入 Clash，再由规则决定走哪个策略组。
 
 ## 需要代理的域名
 
@@ -16,6 +16,8 @@ DOMAIN-SUFFIX,notion-static.com,Notion
 
 这些是 Notion 页面、API、资源、上传和编辑器静态资源使用的主要域名。
 
+> **注意 `notion.com` 这条必须放在规则表靠前位置**。实测日志里 `app.notion.com`、`msgstore-002.app.notion.com` 曾落到「漏网之鱼」，说明当时规则没命中——检查你的规则集里是否有更靠前的 `GEOSITE`/`DOMAIN-KEYWORD` 把它抢先匹配走了。
+
 ## 热更新域名
 
 App 的版本检查和 APK 下载优先使用 GitHub 加速代理：
@@ -25,6 +27,7 @@ gh-proxy.com
 github.com
 objects.githubusercontent.com
 release-assets.githubusercontent.com
+api.github.com
 ```
 
 如果希望热更新稳定，可以单独建一个 `GitHub` 策略组，或直接让它们也走 `Notion`：
@@ -34,9 +37,35 @@ DOMAIN-SUFFIX,gh-proxy.com,Notion
 DOMAIN-SUFFIX,github.com,Notion
 DOMAIN-SUFFIX,objects.githubusercontent.com,Notion
 DOMAIN-SUFFIX,release-assets.githubusercontent.com,Notion
+DOMAIN-SUFFIX,api.github.com,Notion
 ```
 
 如果你的规则里已有 `GitHub` 分组，把上面的策略名从 `Notion` 改成你的分组名即可。
+
+> **`api.github.com` 是 2026-10-09 新补的**。App 的 `UpdateService` 除了走 `gh-proxy.com` 的 `latest.json`，还会直接调 `api.github.com/repos/.../releases/latest` 作为回退（见 `lib/core/update_service.dart:60`）。日志里出现过 `[Update] primary check failed: Exception: GitHub API HTTP 403`——匿名请求 `api.github.com` 有 60 次/小时的限流，未代理时更容易触发。补上这条可显著改善热更新成功率。
+
+## 分析/埋点域名（建议 REJECT，不要代理）
+
+App 已在代码层拦截以下埋点域名（`android/.../BrowserWebViewHolder.kt:183-188` 的 `shouldInterceptRequest` 返回空响应）：
+
+```text
+api.amplitude.com
+api.statsig.com
+featuregates.org
+prod.web-sdk.amplitude.com
+```
+
+**建议在 Clash 层也一并 REJECT**，好处是：DNS/连接层就断掉，省下 WebView 拦截器里的 TLS 握手与请求往返开销，把带宽让给正文加载。
+
+```yaml
+DOMAIN-SUFFIX,amplitude.com,REJECT
+DOMAIN-SUFFIX,statsig.com,REJECT
+DOMAIN-SUFFIX,featuregates.org,REJECT
+```
+
+> 这 3 条只覆盖上面 4 个域名所在的根域（`amplitude.com` 同时覆盖 `api.amplitude.com` 和 `prod.web-sdk.amplitude.com`）。
+>
+> **风险提示**：`statsig` / `amplitude` 承载 A/B 实验与功能开关。REJECT 后 Notion 仍会正常渲染（SDK 已容错），但理论上极小概率影响灰度功能下发。App 内已拦截约两周，未观察到异常，可放心在 Clash 层加重。
 
 ## 第三方域名
 
@@ -70,6 +99,36 @@ proxy-groups:
 
 `自动选择` 和 `手动选择` 请替换成你配置里已有的节点或节点组。
 
+## 完整规则（可直接粘贴）
+
+按 `REJECT → Notion → GitHub/热更新 → 第三方` 的顺序排列：
+
+```yaml
+rules:
+  # --- 埋点/分析：直接拒绝 ---
+  - DOMAIN-SUFFIX,amplitude.com,REJECT
+  - DOMAIN-SUFFIX,statsig.com,REJECT
+  - DOMAIN-SUFFIX,featuregates.org,REJECT
+
+  # --- Notion 核心：走代理 ---
+  - DOMAIN-SUFFIX,notion.com,Notion
+  - DOMAIN-SUFFIX,notion.so,Notion
+  - DOMAIN-SUFFIX,notion.site,Notion
+  - DOMAIN-SUFFIX,notionusercontent.com,Notion
+  - DOMAIN-SUFFIX,notion-static.com,Notion
+
+  # --- 热更新 / GitHub：走代理 ---
+  - DOMAIN-SUFFIX,gh-proxy.com,Notion
+  - DOMAIN-SUFFIX,github.com,Notion
+  - DOMAIN-SUFFIX,api.github.com,Notion
+  - DOMAIN-SUFFIX,objects.githubusercontent.com,Notion
+  - DOMAIN-SUFFIX,release-assets.githubusercontent.com,Notion
+
+  # --- 第三方（可选）---
+  - DOMAIN-SUFFIX,transcend-cdn.com,Notion
+  - DOMAIN-SUFFIX,splunkcloud.com,Notion
+```
+
 ## 当前日志说明
 
 你之前的日志显示：
@@ -89,3 +148,5 @@ gh-proxy.com -> Match -> 漏网之鱼
 - 如果使用分应用代理，请把 `com.notion.app` 加入代理列表。
 - 修改规则后建议重启 Clash，并完全退出后重新打开 App。
 - 如果换节点，优先测试延迟低且稳定支持长连接的节点；Cloudflare 优选节点不一定适合 Notion 编辑器和同步连接。
+- **代理残留排查**：日志里若出现 `Connection refused ... 127.x.x.x`（如 `127.57.44.31`）这类地址，是 Clash 的 fake-ip 段。通常意味着 Clash 已关闭但 App 仍缓存了代理配置——完全退出 App 或重启手机可清。
+- **`api.notion.com` TLS 握手失败**：日志里出现过 `HandshakeException: Connection terminated during handshake`。这是长连接被中途掐断，常见于节点不稳定或 MTU 问题。优先换延迟低、稳定支持长连接的节点，而非单纯追求低延迟。
