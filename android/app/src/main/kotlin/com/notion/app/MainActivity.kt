@@ -152,11 +152,6 @@ class MainActivity : FlutterActivity() {
                         prewarmWebView()
                         result.success(true)
                     }
-                    "resetPageHistory" -> {
-                        // 记录已被删除：清空 WebView 历史，避免返回时钻回已删页面。
-                        BrowserWebViewHolder.resetHistoryToCurrent()
-                        result.success(true)
-                    }
                     else -> result.notImplemented()
                 }
             }

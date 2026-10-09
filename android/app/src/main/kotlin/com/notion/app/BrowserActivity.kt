@@ -75,19 +75,28 @@ class BrowserActivity : Activity() {
         val currentWebView = webView
         val canGoBack = currentWebView?.canGoBack() == true
         val backUrl = previousHistoryUrl(currentWebView, canGoBack)
+        // 历史上一页是否仍是「当前这篇笔记」的 SPA 内部状态。
+        // 场景：在笔记内把页面移入垃圾箱后，Notion SPA 会自动 pushState 跳到列表视图，
+        // 历史栈变成 [笔记页] → [列表视图/笔记的其它内部状态]。此时 canGoBack=true，
+        // 若直接 goBack() 会把用户带回那篇**已删除**的笔记页，需要再点一次才能退出。
+        // 判据：backUrl 路径里的 pageId 与当前 loadingPageId 相同，视为「同一笔记的内部状态」。
+        val backTargetsSamePage = backUrl != null && urlMatchesPage(backUrl, loadingPageId)
         val action = when {
             currentWebView == null -> "finish(webview=null)"
             isPageLoadPending -> "finish(pendingLoad)"
+            canGoBack && backTargetsSamePage -> "finish(samePageHistory)"
             canGoBack -> "goBack"
             else -> "finish"
         }
         writeBrowserLog(
-            "back pressed: action=$action canGoBack=$canGoBack " +
+            "back pressed: action=$action canGoBack=$canGoBack samePage=$backTargetsSamePage " +
                 "pending=$isPageLoadPending loadingPageId=$loadingPageId " +
                 "currentUrl=${currentWebView?.url} backUrl=$backUrl",
         )
         // 新笔记尚未加载完时，历史里的上一页属于上一篇笔记，不能 goBack 过去。
-        if (currentWebView != null && !isPageLoadPending && canGoBack) {
+        // 另：历史上一页仍是同一篇笔记的内部状态（如删除后的列表视图）时也不 goBack，
+        // 否则会钻回已删/已离开的笔记页——此时应当直接退出浏览器。
+        if (currentWebView != null && !isPageLoadPending && canGoBack && !backTargetsSamePage) {
             currentWebView.goBack()
             return
         }
@@ -103,6 +112,21 @@ class BrowserActivity : Activity() {
             if (index > 0) list.getItemAtIndex(index - 1)?.url else null
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /**
+     * 判断某个 URL 的路径里是否含有指定 pageId（忽略连字符、大小写）。
+     * 与 {@link #urlMatchesLoadingPage} 同源逻辑，抽出来供 back 判定复用。
+     */
+    private fun urlMatchesPage(url: String, pageId: String): Boolean {
+        if (pageId.isEmpty()) return false
+        return try {
+            Uri.parse(url).pathSegments.any { segment ->
+                segment.replace("-", "").lowercase(Locale.US).contains(pageId)
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -667,13 +691,7 @@ class BrowserActivity : Activity() {
 
     private fun urlMatchesLoadingPage(url: String): Boolean {
         if (loadingPageId.isEmpty()) return false
-        return try {
-            Uri.parse(url).pathSegments.any { segment ->
-                segment.replace("-", "").lowercase(Locale.US).contains(loadingPageId)
-            }
-        } catch (_: Exception) {
-            false
-        }
+        return urlMatchesPage(url, loadingPageId)
     }
 
     private fun retryPendingPage() {

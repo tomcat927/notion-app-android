@@ -119,25 +119,6 @@ internal object BrowserWebViewHolder {
         lightbox?.injectClickScript(view)
     }
 
-    /**
-     * 把当前页面变为历史栈的唯一条目，使后续 {@link WebView#canGoBack()} 返回 false，
-     * 从而让 BrowserActivity.onBackPressed 直接走 finish() 退出，而不是 goBack()。
-     *
-     * 场景（2026-10-09 实测）：在 Notion SPA 内删除一篇笔记后，SPA 会自动 pushState
-     * 跳到列表视图，历史栈变成 [笔记页] → [列表视图]。此时点返回，canGoBack=true，
-     * goBack() 会把用户带回那篇**已删除**的笔记页，需要再点一次才能退出。
-     *
-     * 调用时机：Dart 侧刷新确认「记录已删除」后主动通知（见 resetPageHistory 通道）。
-     * 之所以在此时机清理而非更早，是因为只有到这一刻我们才能确定当前 SPA 会话的
-     * 历史顶部指向一篇已删页面，清栈是安全的、有据可依的。
-     */
-    internal fun resetHistoryToCurrent() {
-        val view = webView ?: return
-        val before = view.copyBackForwardList().size
-        view.clearHistory()
-        writeBrowserLog("reset history to current: entries=$before -> 1")
-    }
-
     internal fun writeBrowserLog(message: String) {
         logExecutor.execute {
             val context = appContext ?: return@execute
