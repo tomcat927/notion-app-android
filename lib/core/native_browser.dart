@@ -37,6 +37,17 @@ class NativeBrowser {
     } catch (_) {}
   }
 
+  /// 通知原生清空内嵌浏览器的历史栈，使后续返回直接退出而不是 goBack。
+  ///
+  /// 用于「笔记被删除」场景：SPA 会在删除后自动 pushState 到列表视图，历史栈里
+  /// 仍留着那篇已删笔记，导致返回时钻回已删页面（见 BrowserWebViewHolder.resetHistoryToCurrent）。
+  static Future<void> resetPageHistory() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<bool>('resetPageHistory');
+    } catch (_) {}
+  }
+
   static Future<bool> openPage({
    required String pageId,
    required String title,

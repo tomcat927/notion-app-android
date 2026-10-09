@@ -1428,6 +1428,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     unawaited(RecentPagesService.removeRecentPage(pageId));
+    // 笔记已删除：SPA 删除后会自动跳到列表视图并把那篇笔记留在历史栈里，
+    // 导致用户点返回时钻回已删页面、再点一次才退出。清空历史栈让返回一步到位。
+    unawaited(NativeBrowser.resetPageHistory());
     unawaited(
       AppLogger.log(
         'Home',
