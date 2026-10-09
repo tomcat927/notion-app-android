@@ -348,11 +348,19 @@ class MainActivity : FlutterActivity() {
     private var prewarmAttempt = 0
     private val prewarmHandler = Handler(Looper.getMainLooper())
 
-    /** 上一次轮询看到的「已完成资源数」；-1 表示还没取到基准值。 */
-    private var prewarmLastResourceCount = -1
-
-    /** 连续「资源数没变」的轮询次数。 */
-    private var prewarmIdlePolls = 0
+    /**
+     * 当前有效的轮询链编号。
+     *
+     * `onPageFinished` 在 SPA 上会**触发多次**（实测 2–3 次：主文档、客户端路由、
+     * 以及 chunk 加载引起的后续回调）。早期实现每次都开一条新轮询链，且多条链
+     * **共用**计数状态 —— 3 条链时每 3s 窗口内 idle 会被累加 3 次，
+     * 只需一轮「静默」就凑满释放判据，页面稍微喘口气就被误判为加载完毕而提前释放
+     * （实测出现过只加载 362 个资源就释放的异常轮次）。
+     *
+     * 这里改为单调自增的 token：每次 `onPageFinished` 作废旧链，只保留最新一条，
+     * 且计数状态沿链传递（函数参数），不再共享字段。
+     */
+    private var prewarmPollToken = 0
 
     /** logcat 标签：`adb logcat -s NotionPrewarm` 可直接看预热生命周期。 */
     private val prewarmTag = "NotionPrewarm"
@@ -377,18 +385,32 @@ class MainActivity : FlutterActivity() {
      * 是在这之后才开始下载的。若在 `onPageFinished` 里立刻 `destroy()`，
      * 这些在途请求会被一并掐断，chunk 落不进 HTTP 缓存，预热依然无效。
      *
-     * **为什么不能用固定 10s**（实测，见 docs §7.4）：预热能灌进多少 chunk 完全取决于
+     * **为什么不能用固定 10s**（实测，见 docs §7.5）：预热能灌进多少 chunk 完全取决于
      * 「链路速度 × 等待时长」。同一段代码、只因链路快慢不同，实测缓存条目数在
      * **197 ~ 618 之间摆动（3 倍差距）**：
-     *   - 快链路：`onPageFinished` 1.5s，10s 内就灌满 618 条（根页上限约 635）；
+     *   - 快链路：`onPageFinished` 1.5s，10s 内就灌满 618 条；
      *   - 慢链路：`onPageFinished` 3.5s，10s 到点时只灌进 ~250 条就被掐断。
-     * 而一篇笔记实际要用 ~750 条 —— 慢链路下预热只覆盖了 1/3，这正是 stall 仍在的原因。
+     * 而一篇笔记实际要用 ~950 个资源 —— 慢链路下预热只覆盖了 1/3，这正是 stall 仍在的原因。
      * 所以判据必须是「加载真的停了」，而不是「等够了」。
+     * （改成自适应后稳定在 ~920 个资源，见 §7.5。）
      */
     private val prewarmPollIntervalMs = 3_000L
 
     /** 连续这么多次轮询都没有新资源完成，才认为加载停了（3 × 3s ≈ 9s 静默）。 */
     private val prewarmIdlePollsToRelease = 3
+
+    /**
+     * 静默判据的**下限保护**：从首次 `onPageFinished` 起，至少等这么久才允许释放。
+     *
+     * 单靠「9s 静默」仍可能被骗：SPA 是分波加载的，若两波之间的空档超过 9s，
+     * 会被误判为加载完毕而提前释放。实测出现过只加载 362 个资源就释放的轮次。
+     * 正常轮次在 onPageFinished 后约 19s 才静默，故取 20s 作下限 —— 对正常路径
+     * 几乎无影响，只用于拦掉过早释放。
+     */
+    private val prewarmMinSettleMs = 20_000L
+
+    /** 本轮预热首次 `onPageFinished` 的时刻（`SystemClock.elapsedRealtime`）。 */
+    private var prewarmFirstFinishedAtMs = 0L
 
     /**
      * 兜底：单次预热最多存活这么久。
@@ -416,6 +438,7 @@ class MainActivity : FlutterActivity() {
     private fun startPrewarmAttempt() {
         prewarmAttempt += 1
         val attempt = prewarmAttempt
+        prewarmFirstFinishedAtMs = 0L
         val webView = WebView(this)
         prewarmWebView = webView
         webView.settings.apply {
@@ -436,9 +459,13 @@ class MainActivity : FlutterActivity() {
                 Log.i(prewarmTag, "attempt $attempt onPageFinished: $url")
                 // 不能立刻 destroy：chunk 还在下载，掐断就白预热了。
                 // 改为轮询「还有没有新资源完成」，静默后才释放（见 prewarmPollIntervalMs 注释）。
-                prewarmLastResourceCount = -1
-                prewarmIdlePolls = 0
-                postPrewarmPoll(target, attempt)
+                if (prewarmFirstFinishedAtMs == 0L) {
+                    prewarmFirstFinishedAtMs = SystemClock.elapsedRealtime()
+                }
+                // 作废旧链（onPageFinished 会触发多次），只保留最新一条。
+                prewarmPollToken += 1
+                Log.i(prewarmTag, "attempt $attempt start poll chain=$prewarmPollToken")
+                postPrewarmPoll(target, attempt, prewarmPollToken, -1, 0)
             }
 
             override fun onReceivedError(
@@ -468,33 +495,46 @@ class MainActivity : FlutterActivity() {
      * `performance.getEntriesByType('resource')` 只统计**已完成**的资源，
      * 所以它的长度不再变化 == 页面已经没有在飞的请求了 —— 这正是我们要的释放时机。
      */
-    private fun postPrewarmPoll(view: WebView, attempt: Int) {
+    private fun postPrewarmPoll(
+        view: WebView,
+        attempt: Int,
+        token: Int,
+        lastCount: Int,
+        idlePolls: Int,
+    ) {
         prewarmHandler.postDelayed(
             {
-                // 迟到的回调：这个 WebView 已被重试替换/释放，停止轮询。
+                // 迟到的回调：WebView 已被重试替换/释放，或本链已被更新的链取代。
                 if (prewarmWebView !== view) return@postDelayed
+                if (token != prewarmPollToken) {
+                    Log.i(prewarmTag, "attempt $attempt poll chain=$token superseded")
+                    return@postDelayed
+                }
                 val script = "(function(){try{" +
                     "return performance.getEntriesByType('resource').length;" +
                     "}catch(e){return -1}})()"
                 view.evaluateJavascript(script) { raw ->
                     if (prewarmWebView !== view) return@evaluateJavascript
+                    if (token != prewarmPollToken) return@evaluateJavascript
                     val count = raw?.trim()?.trim('"')?.toIntOrNull() ?: -1
-                    if (count > 0 && count == prewarmLastResourceCount) {
-                        prewarmIdlePolls += 1
-                    } else {
-                        prewarmIdlePolls = 0
-                    }
-                    if (count > 0) prewarmLastResourceCount = count
+                    val nextIdle = if (count > 0 && count == lastCount) idlePolls + 1 else 0
+                    val nextLast = if (count > 0) count else lastCount
                     Log.i(
                         prewarmTag,
-                        "attempt $attempt resources=$count idle=${prewarmIdlePolls}x",
+                        "attempt $attempt chain=$token resources=$count idle=${nextIdle}x",
                     )
-                    if (prewarmIdlePolls >= prewarmIdlePollsToRelease) {
+                    val settled =
+                        SystemClock.elapsedRealtime() - prewarmFirstFinishedAtMs >= prewarmMinSettleMs
+                    if (nextIdle >= prewarmIdlePollsToRelease && settled) {
                         releasePrewarmWebView(
-                            "idle ${prewarmIdlePolls * prewarmPollIntervalMs}ms @ $count resources",
+                            "idle ${nextIdle * prewarmPollIntervalMs}ms @ $count resources",
                         )
                     } else {
-                        postPrewarmPoll(view, attempt)
+                        if (nextIdle >= prewarmIdlePollsToRelease) {
+                            // 静默够了但还没到下限：继续等，别被两波之间的空档骗了。
+                            Log.i(prewarmTag, "attempt $attempt idle but not settled yet")
+                        }
+                        postPrewarmPoll(view, attempt, token, nextLast, nextIdle)
                     }
                 }
             },
