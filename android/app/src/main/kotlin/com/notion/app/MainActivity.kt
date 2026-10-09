@@ -15,7 +15,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import android.webkit.CookieManager
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebViewClient
 import android.webkit.WebView
@@ -342,7 +345,11 @@ class MainActivity : FlutterActivity() {
     }
 
     private var prewarmWebView: WebView? = null
+    private var prewarmAttempt = 0
     private val prewarmHandler = Handler(Looper.getMainLooper())
+
+    /** logcat 标签：`adb logcat -s NotionPrewarm` 可直接看预热生命周期。 */
+    private val prewarmTag = "NotionPrewarm"
 
     /**
      * 预热 WebView 的起始 URL。
@@ -367,11 +374,31 @@ class MainActivity : FlutterActivity() {
      */
     private val prewarmSettleMs = 10_000L
 
-    /** 兜底：无论加载是否完成，预热 WebView 最多存活这么久。 */
-    private val prewarmMaxLifetimeMs = 30_000L
+    /**
+     * 兜底：单次预热最多存活这么久。
+     *
+     * 实测预热本身也是一次完整 SPA 冷加载，会撞上链路抖动；30s 在慢链路上不够，
+     * 放宽到 60s（超时后由 prewarmMaxAttempts 决定是否重试）。
+     */
+    private val prewarmMaxLifetimeMs = 60_000L
+
+    /**
+     * 预热失败（主文档加载出错）时的重试次数与间隔。
+     *
+     * 实测预热成功率约 7/10：失败时缓存停在 64K，笔记退回冷加载。
+     * 且失败**成簇**出现（与网络/节点状态相关），重试可覆盖这类瞬时故障。
+     */
+    private val prewarmMaxAttempts = 3
+    private val prewarmRetryDelayMs = 3_000L
 
     private fun prewarmWebView() {
         if (prewarmWebView != null) return
+        startPrewarmAttempt()
+    }
+
+    private fun startPrewarmAttempt() {
+        prewarmAttempt += 1
+        val attempt = prewarmAttempt
         val webView = WebView(this)
         prewarmWebView = webView
         webView.settings.apply {
@@ -386,18 +413,53 @@ class MainActivity : FlutterActivity() {
         }
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
+                // 迟到的回调：这个 WebView 已被重试替换/释放，忽略。
+                if (prewarmWebView !== view) return
+                Log.i(prewarmTag, "attempt $attempt onPageFinished: $url")
                 // 不能立刻 destroy：chunk 还在下载，掐断就白预热了，留 settle 时间。
-                prewarmHandler.postDelayed({ releasePrewarmWebView() }, prewarmSettleMs)
+                prewarmHandler.postDelayed(
+                    { releasePrewarmWebView("finished+settle") },
+                    prewarmSettleMs,
+                )
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?,
+            ) {
+                if (request?.isForMainFrame != true) return
+                if (prewarmWebView !== view) return
+                val detail = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    "code=${error?.errorCode} desc=${error?.description}"
+                } else {
+                    "unknown"
+                }
+                Log.w(prewarmTag, "attempt $attempt main-frame error: $detail")
+                schedulePrewarmRetry(attempt, detail)
             }
         }
+        Log.i(prewarmTag, "attempt $attempt loadUrl $prewarmUrl")
         webView.loadUrl(prewarmUrl)
-        prewarmHandler.postDelayed({ releasePrewarmWebView() }, prewarmMaxLifetimeMs)
+        prewarmHandler.postDelayed({ releasePrewarmWebView("max-lifetime") }, prewarmMaxLifetimeMs)
     }
 
-    private fun releasePrewarmWebView() {
+    private fun schedulePrewarmRetry(attempt: Int, reason: String) {
+        // 先释放（顺带取消 pending 的 settle / max-lifetime 回调），再挂重试，
+        // 顺序不能反 —— releasePrewarmWebView 会清掉 handler 上的所有回调。
+        releasePrewarmWebView(reason)
+        if (attempt >= prewarmMaxAttempts) {
+            Log.w(prewarmTag, "giving up after $attempt attempt(s), last=$reason")
+            return
+        }
+        prewarmHandler.postDelayed({ startPrewarmAttempt() }, prewarmRetryDelayMs)
+    }
+
+    private fun releasePrewarmWebView(reason: String) {
         prewarmHandler.removeCallbacksAndMessages(null)
         prewarmWebView?.destroy()
         prewarmWebView = null
+        Log.i(prewarmTag, "released ($reason)")
     }
 
     private fun clearWebViewCache(result: MethodChannel.Result) {
