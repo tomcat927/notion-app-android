@@ -344,6 +344,32 @@ class MainActivity : FlutterActivity() {
     private var prewarmWebView: WebView? = null
     private val prewarmHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * 预热 WebView 的起始 URL。
+     *
+     * 必须与笔记页**同源**：笔记最终加载的是 `app.notion.com`
+     * （`www.notion.so/<pageId>` 会 302 跳过来），SPA 的 ~900 个 chunk 也全在
+     * `app.notion.com` 上。
+     *
+     * 历史上这里写的是 `https://www.notion.so`（营销站，与笔记**不同源**），
+     * 实测它返回 200 且不跳转 —— 预热它只会写 cookie，**一个 SPA chunk 都灌不进缓存**，
+     * 等于白预热。证据见 docs/perf-analysis/notion-log-analysis-v5-cold-cache-ab.md。
+     */
+    private val prewarmUrl = "https://app.notion.com"
+
+    /**
+     * `onPageFinished` 之后还要再等这么久，才销毁预热 WebView。
+     *
+     * SPA 的 `onPageFinished` 只代表「主文档 + 同步子资源」完成；真正的懒加载 chunk
+     * 是在这之后才开始下载的。若在 `onPageFinished` 里立刻 `destroy()`，
+     * 这些在途请求会被一并掐断，chunk 落不进 HTTP 缓存，预热依然无效。
+     * 冷加载实测约 8s 才把 chunk 拉完，故留 10s 余量。
+     */
+    private val prewarmSettleMs = 10_000L
+
+    /** 兜底：无论加载是否完成，预热 WebView 最多存活这么久。 */
+    private val prewarmMaxLifetimeMs = 30_000L
+
     private fun prewarmWebView() {
         if (prewarmWebView != null) return
         val webView = WebView(this)
@@ -352,22 +378,26 @@ class MainActivity : FlutterActivity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+            // 必须与 BrowserWebViewHolder.MOBILE_USER_AGENT 完全一致：
+            // 若响应带 Vary: User-Agent，UA 不一致会让预热灌的缓存命中不到。
             userAgentString = "Mozilla/5.0 (Linux; Android 10; K) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/141.0.0.0 Mobile Safari/537.36"
         }
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
-                prewarmHandler.removeCallbacksAndMessages(null)
-                view?.destroy()
-                prewarmWebView = null
+                // 不能立刻 destroy：chunk 还在下载，掐断就白预热了，留 settle 时间。
+                prewarmHandler.postDelayed({ releasePrewarmWebView() }, prewarmSettleMs)
             }
         }
-        webView.loadUrl("https://www.notion.so")
-        prewarmHandler.postDelayed({
-            prewarmWebView?.destroy()
-            prewarmWebView = null
-        }, 30000)
+        webView.loadUrl(prewarmUrl)
+        prewarmHandler.postDelayed({ releasePrewarmWebView() }, prewarmMaxLifetimeMs)
+    }
+
+    private fun releasePrewarmWebView() {
+        prewarmHandler.removeCallbacksAndMessages(null)
+        prewarmWebView?.destroy()
+        prewarmWebView = null
     }
 
     private fun clearWebViewCache(result: MethodChannel.Result) {

@@ -138,7 +138,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
       }
       return;
     }
-    // 冷启动直进搜索页时，cookie 尚未产生（需 WebView 加载 notion.so）。
+    // 冷启动直进搜索页时，cookie 尚未产生（需 WebView 加载 app.notion.com）。
     // 先触发预热并等其落盘，再刷新，避免直接失败降级到慢速 WebView 路径。
     if (Platform.isAndroid) {
       unawaited(NativeBrowser.prewarmWebView());
