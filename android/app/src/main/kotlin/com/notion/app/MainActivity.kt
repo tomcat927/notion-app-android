@@ -348,6 +348,12 @@ class MainActivity : FlutterActivity() {
     private var prewarmAttempt = 0
     private val prewarmHandler = Handler(Looper.getMainLooper())
 
+    /** 上一次轮询看到的「已完成资源数」；-1 表示还没取到基准值。 */
+    private var prewarmLastResourceCount = -1
+
+    /** 连续「资源数没变」的轮询次数。 */
+    private var prewarmIdlePolls = 0
+
     /** logcat 标签：`adb logcat -s NotionPrewarm` 可直接看预热生命周期。 */
     private val prewarmTag = "NotionPrewarm"
 
@@ -365,22 +371,33 @@ class MainActivity : FlutterActivity() {
     private val prewarmUrl = "https://app.notion.com"
 
     /**
-     * `onPageFinished` 之后还要再等这么久，才销毁预热 WebView。
+     * `onPageFinished` 之后**不再用固定等待**，改为轮询「还有没有新资源加载完」。
      *
      * SPA 的 `onPageFinished` 只代表「主文档 + 同步子资源」完成；真正的懒加载 chunk
      * 是在这之后才开始下载的。若在 `onPageFinished` 里立刻 `destroy()`，
      * 这些在途请求会被一并掐断，chunk 落不进 HTTP 缓存，预热依然无效。
-     * 冷加载实测约 8s 才把 chunk 拉完，故留 10s 余量。
+     *
+     * **为什么不能用固定 10s**（实测，见 docs §7.4）：预热能灌进多少 chunk 完全取决于
+     * 「链路速度 × 等待时长」。同一段代码、只因链路快慢不同，实测缓存条目数在
+     * **197 ~ 618 之间摆动（3 倍差距）**：
+     *   - 快链路：`onPageFinished` 1.5s，10s 内就灌满 618 条（根页上限约 635）；
+     *   - 慢链路：`onPageFinished` 3.5s，10s 到点时只灌进 ~250 条就被掐断。
+     * 而一篇笔记实际要用 ~750 条 —— 慢链路下预热只覆盖了 1/3，这正是 stall 仍在的原因。
+     * 所以判据必须是「加载真的停了」，而不是「等够了」。
      */
-    private val prewarmSettleMs = 10_000L
+    private val prewarmPollIntervalMs = 3_000L
+
+    /** 连续这么多次轮询都没有新资源完成，才认为加载停了（3 × 3s ≈ 9s 静默）。 */
+    private val prewarmIdlePollsToRelease = 3
 
     /**
      * 兜底：单次预热最多存活这么久。
      *
-     * 实测预热本身也是一次完整 SPA 冷加载，会撞上链路抖动；30s 在慢链路上不够，
-     * 放宽到 60s（超时后由 prewarmMaxAttempts 决定是否重试）。
+     * 实测预热本身也是一次完整 SPA 冷加载，会撞上链路抖动；慢链路上把 ~600 个 chunk
+     * 拉完可能要几十秒，故从 60s 放宽到 120s。这是**绝对上限**，绝大多数情况会先被
+     * 「静默释放」触发（实测根页约 15s 就不再有新资源）。
      */
-    private val prewarmMaxLifetimeMs = 60_000L
+    private val prewarmMaxLifetimeMs = 120_000L
 
     /**
      * 预热失败（主文档加载出错）时的重试次数与间隔。
@@ -414,13 +431,14 @@ class MainActivity : FlutterActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 // 迟到的回调：这个 WebView 已被重试替换/释放，忽略。
-                if (prewarmWebView !== view) return
+                val target = view ?: return
+                if (prewarmWebView !== target) return
                 Log.i(prewarmTag, "attempt $attempt onPageFinished: $url")
-                // 不能立刻 destroy：chunk 还在下载，掐断就白预热了，留 settle 时间。
-                prewarmHandler.postDelayed(
-                    { releasePrewarmWebView("finished+settle") },
-                    prewarmSettleMs,
-                )
+                // 不能立刻 destroy：chunk 还在下载，掐断就白预热了。
+                // 改为轮询「还有没有新资源完成」，静默后才释放（见 prewarmPollIntervalMs 注释）。
+                prewarmLastResourceCount = -1
+                prewarmIdlePolls = 0
+                postPrewarmPoll(target, attempt)
             }
 
             override fun onReceivedError(
@@ -442,6 +460,46 @@ class MainActivity : FlutterActivity() {
         Log.i(prewarmTag, "attempt $attempt loadUrl $prewarmUrl")
         webView.loadUrl(prewarmUrl)
         prewarmHandler.postDelayed({ releasePrewarmWebView("max-lifetime") }, prewarmMaxLifetimeMs)
+    }
+
+    /**
+     * 轮询 SPA 的「已完成资源数」，连续 N 次不再增长就释放预热 WebView。
+     *
+     * `performance.getEntriesByType('resource')` 只统计**已完成**的资源，
+     * 所以它的长度不再变化 == 页面已经没有在飞的请求了 —— 这正是我们要的释放时机。
+     */
+    private fun postPrewarmPoll(view: WebView, attempt: Int) {
+        prewarmHandler.postDelayed(
+            {
+                // 迟到的回调：这个 WebView 已被重试替换/释放，停止轮询。
+                if (prewarmWebView !== view) return@postDelayed
+                val script = "(function(){try{" +
+                    "return performance.getEntriesByType('resource').length;" +
+                    "}catch(e){return -1}})()"
+                view.evaluateJavascript(script) { raw ->
+                    if (prewarmWebView !== view) return@evaluateJavascript
+                    val count = raw?.trim()?.trim('"')?.toIntOrNull() ?: -1
+                    if (count > 0 && count == prewarmLastResourceCount) {
+                        prewarmIdlePolls += 1
+                    } else {
+                        prewarmIdlePolls = 0
+                    }
+                    if (count > 0) prewarmLastResourceCount = count
+                    Log.i(
+                        prewarmTag,
+                        "attempt $attempt resources=$count idle=${prewarmIdlePolls}x",
+                    )
+                    if (prewarmIdlePolls >= prewarmIdlePollsToRelease) {
+                        releasePrewarmWebView(
+                            "idle ${prewarmIdlePolls * prewarmPollIntervalMs}ms @ $count resources",
+                        )
+                    } else {
+                        postPrewarmPoll(view, attempt)
+                    }
+                }
+            },
+            prewarmPollIntervalMs,
+        )
     }
 
     private fun schedulePrewarmRetry(attempt: Int, reason: String) {
@@ -524,6 +582,13 @@ class MainActivity : FlutterActivity() {
         if (pageId.isNullOrBlank()) {
             result.error("invalid_argument", "缺少页面 ID", null)
             return
+        }
+
+        // 用户要开笔记了：立刻停掉后台预热，避免它和笔记页抢同一条链路的带宽。
+        // 此时预热该灌的 chunk 已经灌得差不多了（实测 4s 就有 ~250 条、11s 到 ~580 条），
+        // 继续跑只会互相拖慢。
+        if (prewarmWebView != null) {
+            releasePrewarmWebView("page opening")
         }
 
         try {
