@@ -54,6 +54,10 @@ internal object BrowserWebViewHolder {
         Thread(runnable, "browser-log")
     }
 
+    /** 累计拦截次数，仅用于节流日志（shouldInterceptRequest 在 IO 线程回调）。 */
+    @Volatile
+    private var blockCounter = 0
+
     private val idleReleaseRunnable = Runnable {
         writeBrowserLog("idle release timeout, releasing webview")
         destroyWebView()
@@ -180,11 +184,14 @@ internal object BrowserWebViewHolder {
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             val url = request.url?.toString() ?: return null
-            if (url.contains("api.amplitude.com") ||
-                url.contains("api.statsig.com") ||
-                url.contains("featuregates.org") ||
-                url.contains("prod.web-sdk.amplitude.com")
-            ) {
+            if (isBlockedRequest(url)) {
+                // 立即返回空响应，避免请求真正发出后等 DNS/连接超时。
+                // 实证（2026-10-09 perf 探针）：splunkcloud 4 次加载累计耗时 121.8s、
+                // 传输 0 字节（全失败）；exp.notion.com 单次最长 30s。短路掉可省下这些纯等待。
+                blockCounter += 1
+                if (blockCounter % BLOCK_LOG_EVERY == 1) {
+                    writeBrowserLog("blocked request (#$blockCounter): $url")
+                }
                 return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
             }
             return null
@@ -339,4 +346,34 @@ internal object BrowserWebViewHolder {
     private const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) " +
         "AppleWebKit/537.36 (KHTML, like Gecko) " +
         "Chrome/141.0.0.0 Mobile Safari/537.36"
+
+    /** 每 N 次拦截打一条日志，避免污染诊断日志。 */
+    private const val BLOCK_LOG_EVERY = 20
+
+    /**
+     * 被拦截的请求主机（子串匹配）。
+     *
+     * 分成两类：
+     * 1. 埋点/实验 SDK —— 断网后 SDK 会容错，不影响渲染（2026-10-09 日志实证：
+     *    拦截后仅剩 JS 层 warn，无网络请求）。
+     * 2. 自身日志上报端点 —— 实测传输 0 字节且长时间拖超时（splunkcloud 4 次加载
+     *    累计 121.8s；exp.notion.com 单次最长 30s），属纯浪费。
+     *
+     * 早期版本在 shouldInterceptRequest 里直接写 4 个域名，现集中管理。
+     */
+    private val BLOCKED_HOSTS = listOf(
+        // 埋点 / 分析 / 功能开关 SDK
+        "api.amplitude.com",
+        "prod.web-sdk.amplitude.com",
+        "api.statsig.com",
+        "featuregates.org",
+        // Notion 自身日志上报（实测纯浪费）
+        "splunkcloud.com",
+        // 实验下发（属 notion.com 后缀，默认走代理反而更慢）
+        "exp.notion.com",
+    )
+
+    /** 判定 URL 是否应被短路。抽成函数便于单测与集中维护。 */
+    private fun isBlockedRequest(url: String): Boolean =
+        BLOCKED_HOSTS.any { url.contains(it) }
 }
