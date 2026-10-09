@@ -129,6 +129,21 @@ rules:
   - DOMAIN-SUFFIX,splunkcloud.com,Notion
 ```
 
+> ⚠️ **生效位置提示**：本文档只是**规则说明**，改它不会影响你的订阅。
+> 你实际使用的订阅由 [`tomcat927/cf-pref-sub-gen`](https://github.com/tomcat927/cf-pref-sub-gen)
+> 的 `server.py`（`build_clash()` 内 `rules:` 段）生成，部署在腾讯云
+> `/opt/cf-pref-sub-gen/server.py`。**要改线上行为必须改 `server.py` 并重新部署**：
+>
+> ```bash
+> scp server.py root@119.91.136.173:/opt/cf-pref-sub-gen/server.py.new
+> ssh root@119.91.136.173 "cd /opt/cf-pref-sub-gen && cp server.py server.py.bak-$(date +%s) \
+>   && mv server.py.new server.py && rm -rf __pycache__ && systemctl restart cf-pref-sub-gen"
+> ```
+>
+> **2026-10-09 已同步**：`api.github.com` 已加入 `server.py`（commit `6ff7d98`）并部署上线，
+> 线上订阅实测已含该规则。注意 `server.py` 用的出站组名是 `🚀节点选择`，
+> 而本文档模板用的是 `Notion` —— 以订阅实际输出为准。
+
 ## 当前日志说明
 
 你之前的日志显示：
