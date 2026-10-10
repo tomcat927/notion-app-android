@@ -786,21 +786,24 @@ class BrowserActivity : Activity() {
   const EDGE = 12;
   const BUTTON_H = 40;
 
-  const collect = () => {
-    if (!document.querySelector('.notion-page-content')) return [];
-    return Array.from(document.querySelectorAll('h1, h2, h3'))
+  const headingNodes = () => {
+    const root = document.querySelector('.notion-page-content');
+    if (!root) return [];
+    return Array.from(root.querySelectorAll('h1, h2, h3'))
     .filter(node => (node.innerText || node.textContent || '').trim())
-    .map((node, index) => {
-      if (!node.dataset.notionOutlineId) {
-        node.dataset.notionOutlineId = 'notion-outline-' + index;
-      }
-      return {
-        id: node.dataset.notionOutlineId,
-        level: Number(node.tagName.substring(1)),
-        text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim()
-      };
-    });
+    .filter(node => !node.closest('.notion-page-view-title-row'));
   };
+
+  const collect = () => headingNodes().map((node, index) => {
+    if (!node.dataset.notionOutlineId) {
+      node.dataset.notionOutlineId = 'notion-outline-' + index;
+    }
+    return {
+      id: node.dataset.notionOutlineId,
+      level: Number(node.tagName.substring(1)),
+      text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim()
+    };
+  });
 
   const closeOutline = () => {
     const panel = document.getElementById(PANEL_ID);
@@ -878,9 +881,7 @@ class BrowserActivity : Activity() {
   const syncButton = () => {
     const button = ensureButton();
     if (!button) return;
-    const hasContent = !!document.querySelector('.notion-page-content');
-    const count = document.querySelectorAll('h1, h2, h3').length;
-    const visible = hasContent && count > 0;
+    const visible = headingNodes().length > 0;
     button.style.display = visible ? 'block' : 'none';
     if (!visible) closeOutline();
   };
@@ -891,10 +892,9 @@ class BrowserActivity : Activity() {
   const updateVisibility = () => {
     scheduled = false;
     if (!document.body) return;
-    const hasContent = !!document.querySelector('.notion-page-content');
-    const count = document.querySelectorAll('h1, h2, h3').length;
+    const count = headingNodes().length;
     const path = location.pathname;
-    const signature = path + ':' + count + ':' + (hasContent ? 1 : 0);
+    const signature = path + ':' + count;
     if (signature !== lastSignature) {
       const pageChanged = lastPath !== '' && lastPath !== path;
       lastSignature = signature;
