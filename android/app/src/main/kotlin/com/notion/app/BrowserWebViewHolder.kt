@@ -155,7 +155,6 @@ internal object BrowserWebViewHolder {
             userAgentString = MOBILE_USER_AGENT
         }
         view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
-        view.addJavascriptInterface(OutlineBridge(), "NotionOutline")
         view.addJavascriptInterface(InPageSearchBridge(), "NotionInPageSearchNative")
         val box = ImageLightbox { currentActivity }
         lightbox = box
@@ -311,15 +310,6 @@ internal object BrowserWebViewHolder {
             }
         } else {
             null
-        }
-    }
-
-    private class OutlineBridge {
-        @JavascriptInterface
-        fun setVisible(visible: Boolean) {
-            BrowserWebViewHolder.mainHandler.post {
-                BrowserWebViewHolder.currentActivity?.setOutlineVisible(visible)
-            }
         }
     }
 

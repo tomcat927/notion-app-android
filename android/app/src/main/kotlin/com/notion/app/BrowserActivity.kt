@@ -32,7 +32,6 @@ class BrowserActivity : Activity() {
     private lateinit var titleView: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var content: LinearLayout
-    private lateinit var outlineButton: Button
     private lateinit var browserLoadingOverlay: FrameLayout
     private lateinit var browserLoadingSpinner: ProgressBar
     private lateinit var browserLoadingMessage: TextView
@@ -288,21 +287,6 @@ class BrowserActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
-        outlineButton = Button(this).apply {
-            text = "大纲"
-            textSize = 13f
-            isAllCaps = false
-            visibility = View.GONE
-            setOnClickListener { showOutline() }
-        }
-        browserContainer.addView(
-            outlineButton,
-            FrameLayout.LayoutParams(dp(72), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                gravity = Gravity.END or Gravity.BOTTOM
-                setMargins(dp(12), dp(12), dp(16), dp(20))
-            },
-        )
-
         browserLoadingSpinner = ProgressBar(this).apply {
             isIndeterminate = true
         }
@@ -473,10 +457,6 @@ class BrowserActivity : Activity() {
         loadInitialPage()
     }
 
-   private fun showOutline() {
-       webView?.evaluateJavascript("window.__notionShowOutline && window.__notionShowOutline();", null)
-   }
-
     private fun showInPageSearch() {
         webView?.evaluateJavascript(INSTALL_IN_PAGE_SEARCH_SCRIPT, null)
     }
@@ -543,10 +523,6 @@ class BrowserActivity : Activity() {
   tryHighlight();
 })();
         """.trimIndent()
-    }
-
-    internal fun setOutlineVisible(visible: Boolean) {
-        outlineButton.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     internal fun onShowFileChooser(
@@ -805,6 +781,11 @@ class BrowserActivity : Activity() {
 
         private const val INSTALL_OUTLINE_SCRIPT = """
 (() => {
+  const PANEL_ID = 'notion-native-outline';
+  const BUTTON_ID = 'notion-outline-toggle';
+  const EDGE = 12;
+  const BUTTON_H = 40;
+
   const collect = () => {
     if (!document.querySelector('.notion-page-content')) return [];
     return Array.from(document.querySelectorAll('h1, h2, h3'))
@@ -821,33 +802,28 @@ class BrowserActivity : Activity() {
     });
   };
 
-  let lastCount = -1;
-  let scheduled = false;
-  const updateVisibility = () => {
-    scheduled = false;
-    if (!document.body || !document.querySelector('.notion-page-content')) return;
-    const count = document.querySelectorAll('h1, h2, h3').length;
-    if (count === lastCount) return;
-    lastCount = count;
-    collect();
-    if (window.NotionOutline) {
-      window.NotionOutline.setVisible(count > 0);
-    }
-  };
-  const scheduleUpdate = () => {
-    if (scheduled) return;
-    scheduled = true;
-    setTimeout(updateVisibility, 300);
+  const closeOutline = () => {
+    const panel = document.getElementById(PANEL_ID);
+    if (panel) panel.remove();
+    document.removeEventListener('click', onDocumentClick, true);
   };
 
-  window.__notionShowOutline = () => {
+  const onDocumentClick = event => {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+    const target = event.target;
+    if (target && panel.contains(target)) return;
+    if (target && target.closest && target.closest('#' + BUTTON_ID)) return;
+    closeOutline();
+  };
+
+  const openOutline = () => {
     const headings = collect();
     if (!headings.length) return;
-    let panel = document.getElementById('notion-native-outline');
-    if (panel) panel.remove();
-    panel = document.createElement('div');
-    panel.id = 'notion-native-outline';
-    panel.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;max-height:65vh;overflow:auto;z-index:2147483647;background:#fff;color:#111827;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.28);padding:12px;font-family:sans-serif';
+    closeOutline();
+    const panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    panel.style.cssText = 'position:fixed;left:' + EDGE + 'px;right:' + EDGE + 'px;bottom:' + (EDGE * 2 + BUTTON_H) + 'px;max-height:60vh;overflow:auto;z-index:2147483646;background:#fff;color:#111827;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.28);padding:12px;font-family:sans-serif';
 
     const title = document.createElement('div');
     title.textContent = '页面大纲';
@@ -859,14 +835,14 @@ class BrowserActivity : Activity() {
       item.type = 'button';
       item.textContent = heading.text;
       item.style.cssText = 'display:block;width:100%;border:0;background:transparent;text-align:left;padding:10px 10px 10px ' + (10 + (heading.level - 1) * 20) + 'px;font-size:15px;color:#111827';
-     item.addEventListener('click', () => {
-       const target = document.querySelector('[data-notion-outline-id="' + heading.id + '"]');
-       panel.remove();
-       if (!target) return;
-       target.scrollIntoView({behavior:'smooth', block:'start'});
-       setTimeout(function() { target.scrollIntoView({behavior:'smooth', block:'start'}); }, 500);
-       setTimeout(function() { target.scrollIntoView({behavior:'smooth', block:'start'}); }, 1500);
-     });
+      item.addEventListener('click', () => {
+        const target = document.querySelector('[data-notion-outline-id="' + heading.id + '"]');
+        closeOutline();
+        if (!target) return;
+        target.scrollIntoView({behavior:'smooth', block:'start'});
+        setTimeout(function() { target.scrollIntoView({behavior:'smooth', block:'start'}); }, 500);
+        setTimeout(function() { target.scrollIntoView({behavior:'smooth', block:'start'}); }, 1500);
+      });
       panel.appendChild(item);
     });
 
@@ -874,12 +850,76 @@ class BrowserActivity : Activity() {
     close.type = 'button';
     close.textContent = '关闭';
     close.style.cssText = 'display:block;width:100%;border:0;border-top:1px solid #e5e7eb;background:transparent;padding:12px;font-size:15px;color:#2563eb';
-    close.addEventListener('click', () => panel.remove());
+    close.addEventListener('click', () => closeOutline());
     panel.appendChild(close);
-   if (!document.body) return;
-   document.body.appendChild(panel);
+
+    if (!document.body) return;
+    document.body.appendChild(panel);
+    setTimeout(() => document.addEventListener('click', onDocumentClick, true), 0);
   };
 
+  const toggleOutline = () => {
+    if (document.getElementById(PANEL_ID)) {
+      closeOutline();
+    } else {
+      openOutline();
+    }
+  };
+
+  const ensureButton = () => {
+    let button = document.getElementById(BUTTON_ID);
+    if (button) return button;
+    button = document.createElement('button');
+    button.id = BUTTON_ID;
+    button.type = 'button';
+    button.textContent = '大纲';
+    button.style.cssText = 'position:fixed;right:16px;bottom:20px;width:72px;height:' + BUTTON_H + 'px;border:1px solid #d1d5db;border-radius:10px;background:#fff;color:#111827;font-size:13px;font-family:sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.16);z-index:2147483647;display:none';
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      toggleOutline();
+    });
+    if (document.body) document.body.appendChild(button);
+    return button;
+  };
+
+  const syncButton = () => {
+    const button = ensureButton();
+    if (!button) return;
+    const hasContent = !!document.querySelector('.notion-page-content');
+    const count = document.querySelectorAll('h1, h2, h3').length;
+    const visible = hasContent && count > 0;
+    button.style.display = visible ? 'block' : 'none';
+    if (!visible) closeOutline();
+  };
+
+  let lastSignature = '';
+  let lastPath = '';
+  let scheduled = false;
+  const updateVisibility = () => {
+    scheduled = false;
+    if (!document.body) return;
+    const hasContent = !!document.querySelector('.notion-page-content');
+    const count = document.querySelectorAll('h1, h2, h3').length;
+    const path = location.pathname;
+    const signature = path + ':' + count + ':' + (hasContent ? 1 : 0);
+    if (signature !== lastSignature) {
+      const pageChanged = lastPath !== '' && lastPath !== path;
+      lastSignature = signature;
+      lastPath = path;
+      if (pageChanged) closeOutline();
+    }
+    syncButton();
+  };
+  const scheduleUpdate = () => {
+    if (scheduled) return;
+    scheduled = true;
+    setTimeout(updateVisibility, 300);
+  };
+
+  window.__notionToggleOutline = toggleOutline;
+  window.__notionCloseOutline = closeOutline;
+
+  ensureButton();
   updateVisibility();
   if (window.__notionOutlineObserver) window.__notionOutlineObserver.disconnect();
   window.__notionOutlineObserver = new MutationObserver(scheduleUpdate);
