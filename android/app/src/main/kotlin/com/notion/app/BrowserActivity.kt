@@ -846,13 +846,6 @@ class BrowserActivity : Activity() {
       panel.appendChild(item);
     });
 
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.textContent = '关闭';
-    close.style.cssText = 'display:block;width:100%;border:0;border-top:1px solid #e5e7eb;background:transparent;padding:12px;font-size:15px;color:#2563eb';
-    close.addEventListener('click', () => closeOutline());
-    panel.appendChild(close);
-
     if (!document.body) return;
     document.body.appendChild(panel);
     setTimeout(() => document.addEventListener('click', onDocumentClick, true), 0);
