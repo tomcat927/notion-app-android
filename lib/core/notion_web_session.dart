@@ -299,6 +299,18 @@ class NotionWebSession {
   }
 
   Map<String, dynamic> _mapSearchHit(Map<String, dynamic> item) {
+    // 探针：确认 /search 响应里「编辑时间」的真实字段名后再删除。
+    final rawItem = jsonEncode(item);
+    unawaited(
+      AppLogger.log(
+        'SearchProbe',
+        'search item keys=${item.keys.toList()} '
+        'lastEditedTime=${item['lastEditedTime']} '
+        'lastEditedAt=${item['lastEditedAt']} '
+        'updatedAt=${item['updatedAt']} '
+        'rawPreview=${rawItem.substring(0, rawItem.length.clamp(0, 900))}',
+      ),
+    );
     final highlight = (item['highlight'] as Map?) ?? {};
     final highlights = (item['highlights'] as Map?) ?? {};
     final rankingSignals = (item['rankingSignals'] as Map?) ?? {};
