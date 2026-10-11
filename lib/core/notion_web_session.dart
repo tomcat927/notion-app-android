@@ -287,8 +287,12 @@ class NotionWebSession {
       final results = rawResults
           .map((item) => _mapSearchHit(item as Map<String, dynamic>))
           .toList();
-      // 字段名探测是启发式的，若命中率为 0 说明 Notion 改了响应结构，
-      // 打一次日志便于定位（不逐条打，避免刷屏）。
+      // 已实测（2026-10-12 远程日志）：内部 /search 的结果里**没有**编辑时间字段。
+      // 首个结果 keys=[id, highlight, highlightBlockId, highlights, score,
+      // spaceId, sources, analytics, isSurrogateCollection, badges, rankingSignals]，
+      // 顶层与 block 子对象都没有 lastEditedTime/lastEditedAt/updatedAt。
+      // 因此这里保留探测（万一某天 Notion 加回来），命中率为 0 时打一次日志，
+      // 真正的补全由 UI 侧走官方 /v1/pages/{id} 的 last_edited_time 完成。
       if (results.isNotEmpty) {
         final resolved =
             results.where((hit) => (hit['lastEditedTime'] as int? ?? 0) > 0).length;

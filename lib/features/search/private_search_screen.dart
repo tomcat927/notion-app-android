@@ -366,6 +366,11 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
           _hits = response.hits;
         }
       });
+      // 内部 /search 响应不含编辑时间，异步补一轮官方 API 的 last_edited_time；
+      // 拿到后再刷新列表，不阻塞首屏。
+      if (_hits.isNotEmpty) {
+        unawaited(_enrichHitsWithEditedTime(_hits, token));
+      }
     } catch (error) {
       if (!mounted || token != _searchToken) return;
       unawaited(AppLogger.log(
@@ -377,6 +382,62 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
       if (mounted && token == _searchToken) {
         setState(() => _searching = false);
       }
+    }
+  }
+
+  /// 【探针阶段】只对首条结果补一次官方 API 的 last_edited_time。
+  ///
+  /// 背景：内部 `/api/v3/search` 的响应里**没有**编辑时间字段（已实测，见远程日志
+  /// `search lastEditedTime 未命中，首个结果 keys=[id, highlight, ...]`）。
+  /// 官方 `/v1/pages/{id}` 返回 `last_edited_time`，但需要确认：
+  ///   1) token 是否具备该页面的读取权限（否则 404 / object_not_found）
+  ///   2) 取到的日期与网页版显示是否一致
+  /// 先用 1 条验证，避免全量铺开后才发现取不到。
+  Future<void> _enrichHitsWithEditedTime(
+    List<PrivateSearchHit> hits,
+    int token,
+  ) async {
+    final candidate = hits.firstWhere(
+      (hit) => hit.lastEditedTime <= 0,
+      orElse: () => hits.first,
+    );
+    if (!mounted || token != _searchToken) return;
+
+    final edited = await _fetchLastEditedTime(candidate.pageId);
+    unawaited(AppLogger.log(
+      'PrivateSearch',
+      'probe lastEditedTime: pageId=${candidate.pageId} '
+      'title=${candidate.title} resolved=$edited',
+    ));
+    if (edited <= 0 || !mounted || token != _searchToken) return;
+
+    setState(() {
+      _hits = _hits
+          .map((hit) => hit.pageId == candidate.pageId
+              ? hit.copyWith(lastEditedTime: edited)
+              : hit)
+          .toList();
+    });
+  }
+
+  Future<int> _fetchLastEditedTime(String pageId) async {
+    try {
+      final response = await NotionClient.get('/pages/$pageId');
+      if (response.statusCode != 200) {
+        unawaited(AppLogger.log(
+          'PrivateSearch',
+          'probe lastEditedTime HTTP ${response.statusCode}: '
+          '${response.body.substring(0, response.body.length.clamp(0, 200))}',
+        ));
+        return 0;
+      }
+      final data = jsonDecode(response.body);
+      if (data is! Map) return 0;
+      final raw = data['last_edited_time']?.toString() ?? '';
+      return DateTime.tryParse(raw)?.millisecondsSinceEpoch ?? 0;
+    } catch (error) {
+      unawaited(AppLogger.log('PrivateSearch', 'probe lastEditedTime 失败: $error'));
+      return 0;
     }
   }
 
@@ -417,6 +478,10 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
           _hits = response.hits;
         }
       });
+      // 与 HTTP 通道一致：内部响应无编辑时间，异步用官方 API 补齐。
+      if (_hits.isNotEmpty) {
+        unawaited(_enrichHitsWithEditedTime(_hits, token));
+      }
     } catch (error) {
       if (!mounted || token != _searchToken) return;
       setState(() {

@@ -47,6 +47,18 @@ class PrivateSearchHit {
   /// 页面最后编辑时间（毫秒时间戳）。0 表示服务端未返回（旧缓存或字段缺失）。
   final int lastEditedTime;
 
+  PrivateSearchHit copyWith({int? lastEditedTime}) => PrivateSearchHit(
+        pageId: pageId,
+        title: title,
+        pathText: pathText,
+        type: type,
+        primarySnippet: primarySnippet,
+        primaryBlockId: primaryBlockId,
+        score: score,
+        snippets: snippets,
+        lastEditedTime: lastEditedTime ?? this.lastEditedTime,
+      );
+
   Map<String, dynamic> toJson() => {
         'pageId': pageId,
         'title': title,
