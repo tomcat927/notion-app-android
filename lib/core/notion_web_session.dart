@@ -283,9 +283,25 @@ class NotionWebSession {
 
     try {
       final parsed = jsonDecode(response.body);
-      final results = (parsed['results'] as List? ?? const [])
+      final rawResults = parsed['results'] as List? ?? const [];
+      final results = rawResults
           .map((item) => _mapSearchHit(item as Map<String, dynamic>))
           .toList();
+      // 字段名探测是启发式的，若命中率为 0 说明 Notion 改了响应结构，
+      // 打一次日志便于定位（不逐条打，避免刷屏）。
+      if (results.isNotEmpty) {
+        final resolved =
+            results.where((hit) => (hit['lastEditedTime'] as int? ?? 0) > 0).length;
+        if (resolved == 0) {
+          final firstKeys = rawResults.first is Map
+              ? (rawResults.first as Map).keys.toList()
+              : const <Object>[];
+          unawaited(AppLogger.log(
+            'WebSession',
+            'search lastEditedTime 未命中，首个结果 keys=$firstKeys',
+          ));
+        }
+      }
       return {
         'status': response.statusCode,
         'results': results,
@@ -299,21 +315,10 @@ class NotionWebSession {
   }
 
   Map<String, dynamic> _mapSearchHit(Map<String, dynamic> item) {
-    // 探针：确认 /search 响应里「编辑时间」的真实字段名后再删除。
-    final rawItem = jsonEncode(item);
-    unawaited(
-      AppLogger.log(
-        'SearchProbe',
-        'search item keys=${item.keys.toList()} '
-        'lastEditedTime=${item['lastEditedTime']} '
-        'lastEditedAt=${item['lastEditedAt']} '
-        'updatedAt=${item['updatedAt']} '
-        'rawPreview=${rawItem.substring(0, rawItem.length.clamp(0, 900))}',
-      ),
-    );
     final highlight = (item['highlight'] as Map?) ?? {};
     final highlights = (item['highlights'] as Map?) ?? {};
     final rankingSignals = (item['rankingSignals'] as Map?) ?? {};
+    final lastEditedTime = _resolveLastEditedTime(item);
     final textHighlights =
         (highlights['textHighlights'] as List? ?? const [])
             .take(4)
@@ -344,7 +349,34 @@ class NotionWebSession {
           '',
       'score': item['score'] ?? 0,
       'snippets': textHighlights,
+      'lastEditedTime': lastEditedTime,
     };
+  }
+
+  /// 从 /search 的单条结果里解析「最后编辑时间」（毫秒时间戳）。
+  ///
+  /// 不同 Notion 版本/block 类型的位置不一致，按优先级逐个探测：
+  /// 顶层直接给值、或在 block / blockValue 子对象里给值。
+  /// 全部取不到返回 0，由 UI 侧整段省略，避免出现 1970-01-01。
+  int _resolveLastEditedTime(Map<String, dynamic> item) {
+    const candidateKeys = ['lastEditedTime', 'lastEditedAt', 'updatedAt'];
+    const nestedKeys = ['block', 'blockValue', 'value', 'block_value'];
+
+    for (final key in candidateKeys) {
+      final resolved = _toTimestamp(item[key]);
+      if (resolved > 0) return resolved;
+    }
+
+    for (final nested in nestedKeys) {
+      final nestedValue = item[nested];
+      if (nestedValue is! Map) continue;
+      for (final key in candidateKeys) {
+        final resolved = _toTimestamp(nestedValue[key]);
+        if (resolved > 0) return resolved;
+      }
+    }
+
+    return 0;
   }
 
   Future<Map<String, dynamic>> loadRecentPages() async {

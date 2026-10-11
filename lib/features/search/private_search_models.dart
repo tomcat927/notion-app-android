@@ -32,6 +32,7 @@ class PrivateSearchHit {
     required this.primaryBlockId,
     required this.score,
     required this.snippets,
+    this.lastEditedTime = 0,
   });
 
   final String pageId;
@@ -43,6 +44,9 @@ class PrivateSearchHit {
   final double score;
   final List<PrivateSearchSnippet> snippets;
 
+  /// 页面最后编辑时间（毫秒时间戳）。0 表示服务端未返回（旧缓存或字段缺失）。
+  final int lastEditedTime;
+
   Map<String, dynamic> toJson() => {
         'pageId': pageId,
         'title': title,
@@ -52,6 +56,7 @@ class PrivateSearchHit {
         'primaryBlockId': primaryBlockId,
         'score': score,
         'snippets': snippets.map((snippet) => snippet.toJson()).toList(),
+        'lastEditedTime': lastEditedTime,
       };
 
   factory PrivateSearchHit.fromJson(Map<String, dynamic> json) {
@@ -78,6 +83,8 @@ class PrivateSearchHit {
       primaryBlockId: json['primaryBlockId']?.toString() ?? '',
       score: num.tryParse(json['score']?.toString() ?? '')?.toDouble() ?? 0,
       snippets: snippets,
+      lastEditedTime:
+          num.tryParse(json['lastEditedTime']?.toString() ?? '')?.toInt() ?? 0,
     );
   }
 }
@@ -148,6 +155,10 @@ PrivateSearchResponse parsePrivateSearchResponse(String raw) {
                   ?.toDouble() ??
               0,
           snippets: snippets,
+          lastEditedTime:
+              num.tryParse(rawResult['lastEditedTime']?.toString() ?? '')
+                      ?.toInt() ??
+                  0,
         ),
       );
     }

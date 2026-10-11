@@ -334,14 +334,33 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     let result;
     try {
       const parsed = JSON.parse(bodyText);
-      const probe = (parsed.results || []).slice(0, 3).map(item => ({
-        keys: Object.keys(item),
-        lastEditedTime: item.lastEditedTime ?? null,
-        lastEditedAt: item.lastEditedAt ?? null,
-        updatedAt: item.updatedAt ?? null,
-        raw: JSON.stringify(item).slice(0, 900)
-      }));
-      post({requestId: requestId + '-probe', probe});
+      const resolveLastEditedTime = item => {
+        const keys = ['lastEditedTime', 'lastEditedAt', 'updatedAt'];
+        const nested = ['block', 'blockValue', 'value', 'block_value'];
+        const toTs = value => {
+          if (typeof value === 'number' && Number.isFinite(value)) return value;
+          if (typeof value === 'string') {
+            const num = Number(value);
+            if (Number.isFinite(num)) return num;
+            const parsedDate = Date.parse(value);
+            if (Number.isFinite(parsedDate)) return parsedDate;
+          }
+          return 0;
+        };
+        for (const key of keys) {
+          const ts = toTs(item[key]);
+          if (ts > 0) return ts;
+        }
+        for (const wrapper of nested) {
+          const holder = item[wrapper];
+          if (!holder || typeof holder !== 'object') continue;
+          for (const key of keys) {
+            const ts = toTs(holder[key]);
+            if (ts > 0) return ts;
+          }
+        }
+        return 0;
+      };
       const hits = (parsed.results || []).map(item => {
         const highlight = item.highlight || {};
         const highlights = item.highlights || {};
@@ -361,7 +380,8 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
           highlightBlockId:
             item.highlightBlockId || snippets[0]?.blockId || '',
           score: item.score || 0,
-          snippets
+          snippets,
+          lastEditedTime: resolveLastEditedTime(item)
         };
       });
       result = {requestId, status: response.status, results: hits};
@@ -752,16 +772,6 @@ class NotionPrivateSearchBridge extends ChangeNotifier {
     final results = data['results'];
     final isRecents = requestId.startsWith('recents-');
     final debug = data['debug'];
-    if (requestId.endsWith('-probe')) {
-      // 探针：确认 /search 响应里「编辑时间」的真实字段名后，连同发送侧一起删除。
-      unawaited(
-        AppLogger.log(
-          'SearchProbe',
-          'webview probe: id=$requestId data=${jsonEncode(data['probe'])}',
-        ),
-      );
-      return;
-    }
     if (isRecents) {
       unawaited(
         AppLogger.log(

@@ -818,6 +818,7 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
         }
         final hit = row as PrivateSearchHit;
         final titleStyle = Theme.of(context).textTheme.titleMedium!;
+        final subtitle = queryIsEmpty ? null : _buildHitSubtitle(hit);
         return Card(
           child: InkWell(
             borderRadius: BorderRadius.circular(8),
@@ -847,10 +848,10 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        if (!queryIsEmpty && hit.pathText.isNotEmpty) ...[
+                        if (subtitle != null) ...[
                           const SizedBox(height: 4),
                           Text(
-                            hit.pathText,
+                            subtitle,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodySmall,
@@ -984,6 +985,28 @@ class _PrivateSearchScreenState extends State<PrivateSearchScreen>
       default:
         return Icons.description_outlined;
     }
+  }
+
+  /// 拼接搜索结果副标题：`路径 · 上次编辑 <日期>`，与网页版保持一致。
+  /// 两者都缺失时返回 null，调用侧不渲染该行。
+  String? _buildHitSubtitle(PrivateSearchHit hit) {
+    final parts = <String>[];
+    if (hit.pathText.isNotEmpty) parts.add(hit.pathText);
+    final edited = _formatSearchDate(hit.lastEditedTime);
+    if (edited != null) parts.add('上次编辑日期：$edited');
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  /// 把毫秒时间戳格式化为 `2026年10月6日`（与 Notion 网页版一致的写法）。
+  /// 0 或非法值返回 null，由调用侧省略，避免出现 1970-01-01。
+  String? _formatSearchDate(int timestamp) {
+    if (timestamp <= 0) return null;
+    final time = DateTime.fromMillisecondsSinceEpoch(timestamp).toLocal();
+    final now = DateTime.now();
+    if (time.year == now.year) {
+      return '${time.month}月${time.day}日';
+    }
+    return '${time.year}年${time.month}月${time.day}日';
   }
 
   TextSpan _buildRecentTitleText(PrivateSearchHit hit, TextStyle baseStyle) {
