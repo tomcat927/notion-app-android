@@ -17,6 +17,23 @@
 5. 进入你需要操作的 Notion 页面，点击右上角 `...` → **连接** → 选择刚创建的集成
 6. 将 Token 粘贴到 App 登录页面即可
 
+## 登录与会话（API Token 与网页会话）
+
+App 有两条相互独立的身份通道：
+
+- **API 通道**：登录页填入的 Notion Token（内部集成密钥，或个人访问令牌），走 `api.notion.com`，用于页面列表、编辑等。
+- **网页通道**：App 内嵌 WebView 登录 Notion 网页版后留下的 cookie（`token_v2` 等），用于全文搜索等网页接口。
+
+**更换 API Token 不需要重新登录 Notion 网页版。** 在「设置 → 退出登录」后重新填入 Token，只会清除 API Token（`notion_token`），不会清除 WebView 的 cookie，也不会清掉缓存的网页会话（`notion_web_token_v2`）。设置里的「清理缓存」同样不清 cookie。
+
+以下情况才会让网页会话失效、需要在内嵌 WebView 中重新登录 Notion 网页版：
+
+- 卸载 App 或清除 App 数据；
+- cookie 因 Notion 服务端原因自然过期（长期未用、改密码、安全登出等），此时会提示「Notion web 会话未就绪（缺少 cookie）」；
+- 代码显式调用 `NotionWebSession.clear()`（目前没有任何 UI 触发；注意它内部是 secure storage 全量清除）。
+
+注意：网页会话绑定的是你在 WebView 中登录的 Notion 账号，与 API Token 无关。若换成另一个账号的 API Token，会出现「API 用 A、网页搜索用 B」的错配。
+
 ## 技术栈
 - Flutter (Dart)
 - Notion API（`api.notion.com` REST 接口，用于页面列表和旧版轻量编辑）
