@@ -1577,6 +1577,172 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _showTokenInfo() async {
+    final token = await NotionAuth.getToken();
+    if (!mounted) return;
+    if (token == null || token.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前没有已保存的 Token')),
+      );
+      return;
+    }
+
+    final fingerprint = await NotionAuth.tokenFingerprint();
+    if (!mounted) return;
+    final masked = _maskToken(token);
+
+    final navigator = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    String identity;
+    try {
+      final response = await NotionClient.get('/users/me');
+      if (response.statusCode == 200) {
+        identity = _describeTokenIdentity(
+          jsonDecode(response.body) as Map<String, dynamic>,
+        );
+      } else {
+        identity = '获取失败（HTTP ${response.statusCode}）';
+      }
+    } catch (error) {
+      identity = '获取失败：$error';
+    }
+
+    if (!mounted) return;
+    navigator.pop();
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        var revealed = false;
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('当前 Token'),
+              content: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Token',
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      revealed ? token : masked,
+                      style: const TextStyle(fontFamily: 'monospace'),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      '指纹（SHA-256 前 16 位）',
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SelectableText(
+                            fingerprint,
+                            style: const TextStyle(fontFamily: 'monospace'),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.copy, size: 18),
+                          tooltip: '复制指纹',
+                          onPressed: () =>
+                              _copyToClipboard(fingerprint, '已复制指纹'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      '身份',
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(identity),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('关闭'),
+                ),
+                if (!revealed)
+                  FilledButton(
+                    onPressed: () async {
+                      final confirmed = await _confirmRevealToken();
+                      if (confirmed != true) return;
+                      await _copyToClipboard(token, '已复制完整 Token');
+                      setDialogState(() => revealed = true);
+                    },
+                    child: const Text('显示完整 Token'),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<bool> _confirmRevealToken() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('显示完整 Token？'),
+        content: const Text(
+          'Token 等同于你 Notion 的访问凭据，可读写其已授权的全部内容。'
+          '显示后可能被截图或旁观泄露，请仅在私人环境下操作。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('显示并复制'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  Future<void> _copyToClipboard(String value, String message) async {
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  String _maskToken(String token) {
+    if (token.length <= 16) return '••••••••';
+    return '${token.substring(0, 10)}…${token.substring(token.length - 4)}';
+  }
+
+  String _describeTokenIdentity(Map<String, dynamic> data) {
+    final type = data['type']?.toString() ?? '未知';
+    final name = data['name']?.toString() ?? '';
+    final bot = data['bot'];
+    final workspace = bot is Map ? bot['workspace_name']?.toString() : null;
+    final buffer = StringBuffer()
+      ..write(type == 'bot' ? '类型：集成（bot）' : '类型：个人（person）')
+      ..write('\n名称：${name.isEmpty ? '—' : name}');
+    if (workspace != null && workspace.isNotEmpty) {
+      buffer.write('\n工作区：$workspace');
+    }
+    return buffer.toString();
+  }
+
   Future<void> _setShowElementInspector(bool value) async {
     await NativeBrowser.setShowElementInspector(value);
     if (!mounted) return;
@@ -2596,6 +2762,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ? (value) =>
                     unawaited(_setShowElementInspector(value))
                 : null,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.key_outlined),
+            title: const Text('查看当前 Token'),
+            subtitle: const Text('查看掩码、指纹与身份；可显示并复制完整 Token'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => unawaited(_showTokenInfo()),
           ),
         ),
         const SizedBox(height: 8),
