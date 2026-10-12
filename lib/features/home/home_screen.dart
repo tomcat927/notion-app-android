@@ -448,6 +448,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _restoreSelectedSource() async {
     final prefs = await SharedPreferences.getInstance();
     final savedId = prefs.getString('selected_data_source_id');
+    await AppLogger.log(
+      'Home',
+      '恢复数据源: savedId=${savedId ?? 'null'} '
+      'token=${await NotionAuth.tokenFingerprint()}',
+    );
 
     if (savedId == '__recent__') {
       _applyRecentSource();
@@ -590,6 +595,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final sourceId = source['id']?.toString() ?? '';
     if (sourceId.isEmpty || !mounted) return;
 
+    unawaited(
+      AppLogger.log(
+        'Home',
+        '应用数据源: 列表由 ${_databases.length} 条替换为 1 条 '
+        '(有标题 ${_hasTitle(source) ? 1 : 0})',
+      ),
+    );
+
     setState(() {
       _databases = [source];
       _selectedSource = source;
@@ -628,6 +641,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      await _logDatabaseLoadSnapshot(results, data);
+
       final merged = <String, Map<String, dynamic>>{};
       for (final database in [..._databases, ...results]) {
         final id = database['id']?.toString();
@@ -642,6 +657,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await AppLogger.log('Home', '加载数据库列表失败: $error');
       rethrow;
     }
+  }
+
+  /// 记录一次数据源列表请求的快照，用于排查「同一账号在不同设备上列表条数不一致」。
+  ///
+  /// 只写条数、有无标题、分页游标和 token 指纹，不写数据源标题本身：
+  /// 远程日志的脱敏不覆盖标题，写出来等于把笔记库名外发。
+  Future<void> _logDatabaseLoadSnapshot(
+    List<Map<String, dynamic>> results,
+    Map<String, dynamic> data,
+  ) async {
+    final titled = results.where(_hasTitle).length;
+    await AppLogger.log(
+      'Home',
+      '数据源列表: 返回 ${results.length} 条 '
+      '(有标题 $titled / 无标题 ${results.length - titled}) '
+      'has_more=${data['has_more']} '
+      'next_cursor=${data['next_cursor'] == null ? 'null' : 'yes'} '
+      '合并前 ${_databases.length} 条 '
+      'token=${await NotionAuth.tokenFingerprint()}',
+    );
+  }
+
+  bool _hasTitle(Map<String, dynamic> database) {
+    final title = database['title'];
+    if (title is! List) return false;
+    return _richText(title).trim().isNotEmpty;
   }
 
   Future<void> _loadViews() async {
