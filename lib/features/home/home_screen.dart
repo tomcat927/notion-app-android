@@ -448,8 +448,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _restoreSelectedSource() async {
     final prefs = await SharedPreferences.getInstance();
     final savedId = prefs.getString('selected_data_source_id');
-    await AppLogger.log(
-      'Home',
+    await AppLogger.logBreadcrumb(
+      'DataSource',
       '恢复数据源: savedId=${savedId ?? 'null'} '
       'token=${await NotionAuth.tokenFingerprint()}',
     );
@@ -596,8 +596,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (sourceId.isEmpty || !mounted) return;
 
     unawaited(
-      AppLogger.log(
-        'Home',
+      AppLogger.logBreadcrumb(
+        'DataSource',
         '应用数据源: 列表由 ${_databases.length} 条替换为 1 条 '
         '(有标题 ${_hasTitle(source) ? 1 : 0})',
       ),
@@ -668,8 +668,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Map<String, dynamic> data,
   ) async {
     final titled = results.where(_hasTitle).length;
-    await AppLogger.log(
-      'Home',
+    // 走 logBreadcrumb 而非 log：不受「调试日志」开关影响，否则没开开关的设备
+    // 上传的诊断日志里永远看不到这一行（devB 已经踩过一次）。
+    await AppLogger.logBreadcrumb(
+      'DataSource',
       '数据源列表: 返回 ${results.length} 条 '
       '(有标题 $titled / 无标题 ${results.length - titled}) '
       'has_more=${data['has_more']} '
