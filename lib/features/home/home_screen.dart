@@ -451,7 +451,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await AppLogger.logBreadcrumb(
       'DataSource',
       '恢复数据源: savedId=${savedId ?? 'null'} '
-      'token=${await NotionAuth.tokenFingerprint()}',
+      'fp=${await NotionAuth.tokenFingerprint()}',
     );
 
     if (savedId == '__recent__') {
@@ -677,7 +677,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       'has_more=${data['has_more']} '
       'next_cursor=${data['next_cursor'] == null ? 'null' : 'yes'} '
       '合并前 ${_databases.length} 条 '
-      'token=${await NotionAuth.tokenFingerprint()}',
+      'fp=${await NotionAuth.tokenFingerprint()}',
     );
   }
 
