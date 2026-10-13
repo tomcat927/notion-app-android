@@ -1,11 +1,13 @@
 package com.notion.app
 
+import android.Manifest
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.ActivityNotFoundException
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.ProxyInfo
 import android.net.Uri
@@ -25,6 +27,8 @@ import android.webkit.WebView
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -119,6 +123,9 @@ class MainActivity : FlutterActivity() {
                     "enqueueUpdateDownload" -> enqueueUpdateDownload(call, result)
                     "queryUpdateDownload" -> queryUpdateDownload(call, result)
                     "processUpdateDownload" -> processUpdateDownload(call, result)
+                    "ensureNotificationPermission" -> {
+                        result.success(ensureNotificationPermission())
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -739,6 +746,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /**
+     * Android 13+ 通知需运行时授权；未授权时系统下载进度与"更新就绪"通知都不显示。
+     * 返回当前是否已授权，未授权则弹出系统授权框。
+     */
+    private fun ensureNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATION_PERMISSION_REQUEST,
+            )
+        }
+        return granted
+    }
+
     private fun installPendingUpdate() {
         val apkFile = File(cacheDir, "apk_updates/notion-app-update.apk")
         if (!apkFile.exists()) return
@@ -797,6 +824,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val MAX_NATIVE_CRASH_LOG_BYTES = 256 * 1024
         private const val MAX_TRACE_CHARS = 40_000
+        private const val NOTIFICATION_PERMISSION_REQUEST = 4102
         private const val MAIN_THREAD_WATCH_INTERVAL_MS = 5_000L
         private const val MAIN_THREAD_WATCH_DELAY_THRESHOLD_MS = 10_000L
         @Volatile

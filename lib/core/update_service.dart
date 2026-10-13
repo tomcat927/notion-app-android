@@ -191,6 +191,8 @@ class UpdateService {
     void Function(double progress) onProgress,
   ) async {
     await CacheCleanupService.cleanupStartupCaches();
+    // 通知栏下载进度依赖系统 DownloadManager 通知，Android 13+ 需运行时授权。
+    await ensureNotificationPermission();
     final baseDir = await getTemporaryDirectory();
     final updateDir = Directory(path.join(baseDir.path, 'apk_updates'));
     await updateDir.create(recursive: true);
@@ -302,8 +304,22 @@ class UpdateService {
     return file;
   }
 
+  /// 申请 Android 13+ 通知权限；返回当前是否已授权。
+  static Future<bool> ensureNotificationPermission() async {
+    try {
+      return await _installChannel
+              .invokeMethod<bool>('ensureNotificationPermission') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 推送"更新就绪"通知（受"下载完成通知"开关控制）。
   static Future<void> showDownloadCompleteNotification() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!(prefs.getBool(notificationPreferenceKey) ?? true)) return;
       await _installChannel.invokeMethod<bool>('showUpdateNotification');
     } catch (_) {}
   }

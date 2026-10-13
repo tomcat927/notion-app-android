@@ -144,60 +144,7 @@ class _UpdateSectionState extends State<UpdateSection> {
   Future<void> _downloadAndInstall() async {
     final updateInfo = _updateInfo;
     if (updateInfo == null) return;
-
-    final progress = ValueNotifier<double>(0);
-    var dialogOpen = true;
-    final navigator = Navigator.of(context, rootNavigator: true);
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) {
-        return AlertDialog(
-          title: const Text('正在更新'),
-          content: ValueListenableBuilder<double>(
-            valueListenable: progress,
-            builder: (context, value, _) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  LinearProgressIndicator(value: value),
-                  const SizedBox(height: 12),
-                  Text('${(value * 100).toStringAsFixed(0)}%'),
-                ],
-              );
-            },
-          ),
-        );
-      },
-    );
-
-    try {
-      final file = await UpdateService.downloadAndVerify(updateInfo, (value) {
-        progress.value = value.clamp(0.0, 1.0);
-      });
-      if (dialogOpen) {
-        dialogOpen = false;
-        navigator.pop();
-      }
-      if (_updateNotification) {
-        await UpdateService.showDownloadCompleteNotification();
-      }
-      await UpdateService.installApk(file);
-      scaffoldMessenger.showSnackBar(
-        const SnackBar(content: Text('已启动系统安装器')),
-      );
-    } catch (_) {
-      if (dialogOpen) {
-        dialogOpen = false;
-        navigator.pop();
-      }
-      scaffoldMessenger.showSnackBar(
-        const SnackBar(content: Text('更新失败')),
-      );
-    } finally {
-      progress.dispose();
-    }
+    await runUpdateDownload(context, updateInfo);
   }
 
   @override
