@@ -20,7 +20,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.webkit.WebViewCompat
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.text.SimpleDateFormat
@@ -166,9 +165,8 @@ internal object BrowserWebViewHolder {
         // 避免常驻 WebView 长期占内存。API 26 起有效，低版本静默跳过。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
-                WebViewCompat.setRendererPriorityPolicy(
-                    view,
-                    WebViewCompat.RENDERER_PRIORITY_IMPORTANT,
+                view.setRendererPriorityPolicy(
+                    WebView.RENDERER_PRIORITY_IMPORTANT,
                     true,
                 )
             } catch (_: Exception) {
