@@ -61,4 +61,57 @@ class NativeBrowser {
       return false;
     }
   }
+
+  /// 打开内嵌浏览器并进入「正在创建笔记」加载态。
+  ///
+  /// 页面此时尚未创建（没有 pageId），先让浏览器就位并预热，
+  /// 待后台创建拿到 id 后再调用 [navigatePage] 导航过去。
+  static Future<bool> openCreatingPage({required String title}) async {
+    if (!Platform.isAndroid) return false;
+
+    try {
+      final openExternalInApp = await openExternalLinksInApp();
+      final showInspector = await showElementInspector();
+      final opened = await _channel.invokeMethod<bool>('openCreatingPage', {
+        'title': title,
+        'openExternalLinksInApp': openExternalInApp,
+        'showElementInspector': showInspector,
+      });
+      return opened == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 让已打开的内嵌浏览器导航到目标页面（触发 `BrowserActivity.onNewIntent`）。
+  static Future<bool> navigatePage({
+    required String pageId,
+    required String title,
+  }) async {
+    if (!Platform.isAndroid) return false;
+
+    try {
+      final opened = await _channel.invokeMethod<bool>('navigatePage', {
+        'pageId': pageId,
+        'title': title,
+      });
+      return opened == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 通知内嵌浏览器：后台创建失败，切换为错误提示态。
+  static Future<bool> failPendingCreate({required String message}) async {
+    if (!Platform.isAndroid) return false;
+
+    try {
+      final handled = await _channel.invokeMethod<bool>('failPendingCreate', {
+        'message': message,
+      });
+      return handled == true;
+    } catch (_) {
+      return false;
+    }
+  }
 }

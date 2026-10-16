@@ -13,6 +13,27 @@ class NotionClient {
   static const int _maxHandshakeRetries = 3;
   static const int _initialHandshakeRetryDelayMs = 500;
 
+  /// 进程内共享的 HTTP 客户端，复用 TCP/TLS 连接（keep-alive）。
+  ///
+  /// 原先每次都调用顶层 `http.get/post/patch`，等价于每次新建一个客户端，
+  /// 连接无法复用，弱网下反复做 TLS 握手（日志里的 `TLS 握手失败` 大多来自这里）。
+  /// 惰性创建，确保发生在 [NetworkProxy.initialize] 设置 `HttpOverrides.global`
+  /// 之后，从而继承系统代理配置。
+  static http.Client? _client;
+
+  static http.Client get _httpClient => _client ??= http.Client();
+
+  /// 关闭并丢弃当前连接池。退出登录、系统代理变化后调用，
+  /// 让后续请求用新连接继承最新的代理配置。
+  static void resetClient() {
+    try {
+      _client?.close();
+    } catch (_) {
+      // 关闭旧连接失败不应影响后续重建。
+    }
+    _client = null;
+  }
+
   static Future<Map<String, String>> _headers() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('notion_token');
@@ -29,7 +50,7 @@ class NotionClient {
     final url = Uri.parse('$_apiBase$endpoint');
     final headers = await _headers();
     return _withRetry(
-      () => http.get(url, headers: headers),
+      () => _httpClient.get(url, headers: headers),
       url: url,
     );
   }
@@ -42,7 +63,7 @@ class NotionClient {
     final headers = await _headers();
     final encodedBody = jsonEncode(body);
     return _withRetry(
-      () => http.post(url, headers: headers, body: encodedBody),
+      () => _httpClient.post(url, headers: headers, body: encodedBody),
       url: url,
     );
   }
@@ -55,7 +76,7 @@ class NotionClient {
     final headers = await _headers();
     final encodedBody = jsonEncode(body);
     return _withRetry(
-      () => http.patch(url, headers: headers, body: encodedBody),
+      () => _httpClient.patch(url, headers: headers, body: encodedBody),
       url: url,
     );
   }

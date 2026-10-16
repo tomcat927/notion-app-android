@@ -158,6 +158,21 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("snippet"),
                        result,
                    )
+                    "openCreatingPage" -> openCreatingPageBrowser(
+                        call.argument<String>("title"),
+                        call.argument<Boolean>("openExternalLinksInApp"),
+                        call.argument<Boolean>("showElementInspector"),
+                        result,
+                    )
+                    "navigatePage" -> navigatePageBrowser(
+                        call.argument<String>("pageId"),
+                        call.argument<String>("title"),
+                        result,
+                    )
+                    "failPendingCreate" -> failPendingCreateBrowser(
+                        call.argument<String>("message"),
+                        result,
+                    )
                     "prewarm" -> {
                         prewarmWebView()
                         result.success(true)
@@ -663,6 +678,91 @@ class MainActivity : FlutterActivity() {
             result.success(true)
         } catch (error: Exception) {
             result.error("browser_open_failed", error.message ?: "无法打开内嵌浏览器", null)
+        }
+    }
+
+    /**
+     * 打开内嵌浏览器并进入「正在创建笔记」加载态。
+     *
+     * 与 [openPageBrowser] 不同：此时页面还没创建（没有 pageId），先把浏览器就位，
+     * **不释放预热**（让预热继续灌 SPA chunk），等创建接口返回后再 [navigatePageBrowser]。
+     */
+    private fun openCreatingPageBrowser(
+        title: String?,
+        openExternalLinksInApp: Boolean?,
+        showElementInspector: Boolean?,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val intent = Intent(this, BrowserActivity::class.java).apply {
+                putExtra(BrowserActivity.EXTRA_PENDING_CREATE, true)
+                putExtra(BrowserActivity.EXTRA_TITLE, title.orEmpty())
+                putExtra(
+                    BrowserActivity.EXTRA_OPEN_EXTERNAL_LINKS_IN_APP,
+                    openExternalLinksInApp == true,
+                )
+                putExtra(
+                    BrowserActivity.EXTRA_SHOW_ELEMENT_INSPECTOR,
+                    showElementInspector == true,
+                )
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (error: Exception) {
+            result.error("browser_open_failed", error.message ?: "无法打开内嵌浏览器", null)
+        }
+    }
+
+    /**
+     * 让已打开的内嵌浏览器导航到目标页面。
+     *
+     * BrowserActivity 为 singleTop 且与 MainActivity 同 task，因此再次 startActivity
+     * 会命中 [BrowserActivity.onNewIntent]，复用同一个 WebView 导航，无需冷启动。
+     */
+    private fun navigatePageBrowser(
+        pageId: String?,
+        title: String?,
+        result: MethodChannel.Result,
+    ) {
+        if (pageId.isNullOrBlank()) {
+            result.error("invalid_argument", "缺少页面 ID", null)
+            return
+        }
+        // 真正的笔记页要开始加载了：停掉后台预热，避免和它抢同一条链路带宽。
+        if (prewarmWebView != null) {
+            releasePrewarmWebView("page opening")
+        }
+        try {
+            val intent = Intent(this, BrowserActivity::class.java).apply {
+                putExtra(BrowserActivity.EXTRA_PAGE_ID, pageId)
+                putExtra(BrowserActivity.EXTRA_TITLE, title.orEmpty())
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (error: Exception) {
+            result.error("browser_navigate_failed", error.message ?: "无法导航到新页面", null)
+        }
+    }
+
+    /**
+     * 通知内嵌浏览器：后台创建失败，切换为错误提示态。
+     *
+     * 仅当浏览器仍在前台（已绑定 Activity）时才投递，避免用户已经退出后又被
+     * 拉起一个空的浏览器页面。
+     */
+    private fun failPendingCreateBrowser(message: String?, result: MethodChannel.Result) {
+        if (BrowserWebViewHolder.currentActivity == null) {
+            result.success(false)
+            return
+        }
+        try {
+            val intent = Intent(this, BrowserActivity::class.java).apply {
+                putExtra(BrowserActivity.EXTRA_CREATE_ERROR, message.orEmpty())
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (error: Exception) {
+            result.error("browser_create_error_failed", error.message ?: "无法通知创建失败", null)
         }
     }
 

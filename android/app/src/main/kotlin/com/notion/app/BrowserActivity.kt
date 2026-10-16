@@ -46,6 +46,9 @@ class BrowserActivity : Activity() {
     private var highlightBlockId: String = ""
     private var highlightSnippet: String = ""
 
+    /** 「先开浏览器、后台创建」流程中，创建失败后返回按钮应直接退出而非重试加载。 */
+    private var createFailed: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         openExternalLinksInApp =
@@ -57,7 +60,12 @@ class BrowserActivity : Activity() {
        title = intent.getStringExtra(EXTRA_TITLE).takeUnless { it.isNullOrBlank() } ?: "Notion"
         setContentView(createContentView())
         attachWebView()
-        loadInitialPage()
+        val createError = intent.getStringExtra(EXTRA_CREATE_ERROR)
+        when {
+            !createError.isNullOrBlank() -> showCreateError(createError)
+            intent.getBooleanExtra(EXTRA_PENDING_CREATE, false) -> loadPendingCreatePage()
+            else -> loadInitialPage()
+        }
     }
 
     override fun onDestroy() {
@@ -133,9 +141,22 @@ class BrowserActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         BrowserWebViewHolder.cancelIdleRelease()
-        openExternalLinksInApp = intent.getBooleanExtra(EXTRA_OPEN_EXTERNAL_LINKS_IN_APP, false)
+        // 仅在本次 intent 显式带上该开关时才更新，避免「后台创建/导航」的
+        // 二次 intent 把已生效的设置重置为 false。
+        if (intent.hasExtra(EXTRA_OPEN_EXTERNAL_LINKS_IN_APP)) {
+            openExternalLinksInApp = intent.getBooleanExtra(EXTRA_OPEN_EXTERNAL_LINKS_IN_APP, false)
+        }
+
+        // 「先开浏览器、后台创建」失败：切换为错误提示态，等用户返回。
+        val createError = intent.getStringExtra(EXTRA_CREATE_ERROR)
+        if (!createError.isNullOrBlank()) {
+            showCreateError(createError)
+            return
+        }
+
         val newPageId = intent.getStringExtra(EXTRA_PAGE_ID)?.orEmpty()?.trim()?.replace("-", "")
         if (newPageId.isNullOrEmpty()) return
+        createFailed = false
         highlightBlockId = intent.getStringExtra(EXTRA_BLOCK_ID).orEmpty()
         highlightSnippet = intent.getStringExtra(EXTRA_SNIPPET).orEmpty()
         val newTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty()
@@ -300,7 +321,7 @@ class BrowserActivity : Activity() {
         browserLoadingRetryButton = Button(this).apply {
             text = "重试"
             visibility = View.GONE
-            setOnClickListener { retryPendingPage() }
+            setOnClickListener { if (createFailed) finish() else retryPendingPage() }
         }
         val loadingContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -657,12 +678,48 @@ class BrowserActivity : Activity() {
 
         loadingPageId = normalizedPageId
         isPageLoadPending = true
+        createFailed = false
         browserLoadingMessage.text = "正在加载笔记…"
+        browserLoadingSpinner.visibility = View.VISIBLE
+        browserLoadingRetryButton.text = "重试"
+        browserLoadingRetryButton.visibility = View.GONE
+        browserLoadingOverlay.visibility = View.VISIBLE
+        progressBar.progress = 0
+        progressBar.visibility = View.VISIBLE
+    }
+
+    /**
+     * 「先开浏览器、后台创建」的初始态：页面尚未创建，先显示加载浮层等待 pageId。
+     *
+     * 这里**不主动加载任何 URL**：后台预热 WebView 已在灌同源 SPA chunk，
+     * 复用 WebView 保持原样即可（浮层不透明、全屏覆盖）。等 [onNewIntent]
+     * 收到 pageId 后由 [showPageLoading] 切到正常加载态。
+     */
+    private fun loadPendingCreatePage() {
+        loadingPageId = ""
+        isPageLoadPending = true
+        createFailed = false
+        browserLoadingMessage.text = "正在创建笔记…"
         browserLoadingSpinner.visibility = View.VISIBLE
         browserLoadingRetryButton.visibility = View.GONE
         browserLoadingOverlay.visibility = View.VISIBLE
         progressBar.progress = 0
         progressBar.visibility = View.VISIBLE
+        writeBrowserLog("pending create: waiting for page id")
+    }
+
+    /** 后台创建失败：展示错误提示，返回按钮直接退出（[createFailed] 控制）。 */
+    private fun showCreateError(message: String) {
+        createFailed = true
+        // 保持 pending：返回键直接退出浏览器，而不是钻回复用 WebView 的历史页。
+        isPageLoadPending = true
+        browserLoadingSpinner.visibility = View.GONE
+        browserLoadingMessage.text = message.ifBlank { "创建失败，请返回重试" }
+        browserLoadingRetryButton.text = "返回"
+        browserLoadingRetryButton.visibility = View.VISIBLE
+        progressBar.visibility = View.GONE
+        browserLoadingOverlay.visibility = View.VISIBLE
+        writeBrowserLog("pending create failed: $message")
     }
 
     private fun urlMatchesLoadingPage(url: String): Boolean {
@@ -738,6 +795,12 @@ class BrowserActivity : Activity() {
        const val EXTRA_SHOW_ELEMENT_INSPECTOR = "showElementInspector"
         const val EXTRA_BLOCK_ID = "blockId"
         const val EXTRA_SNIPPET = "snippet"
+
+        /** 只开浏览器、进入「正在创建笔记」加载态（此时还没有 pageId）。 */
+        const val EXTRA_PENDING_CREATE = "pendingCreate"
+
+        /** 后台创建失败时携带的错误文案，命中后切换为错误提示态。 */
+        const val EXTRA_CREATE_ERROR = "createError"
         private const val FILE_CHOOSER_REQUEST_CODE = 9031
 
         private const val HIDE_NOTION_FLOATERS_SCRIPT = """

@@ -59,7 +59,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _loading = true;
   bool _loadingMore = false;
   String? _error;
-  bool _creatingPage = false;
   bool _searchActive = false;
   String _searchQuery = '';
   String _searchScope = 'current';
@@ -1784,6 +1783,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _logout() async {
     await NotionAuth.removeToken();
+    // 丢掉复用中的连接池，避免带着旧会话的连接被下次登录复用。
+    NotionClient.resetClient();
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -1925,14 +1926,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               _sourceId != '__recent__' &&
               !_searchActive
           ? FloatingActionButton.extended(
-              onPressed: _creatingPage ? null : _createPage,
-              icon: _creatingPage
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.note_add_outlined),
-              label: Text(_creatingPage ? '创建中' : '新建页面'),
+              onPressed: _createPage,
+              icon: const Icon(Icons.note_add_outlined),
+              label: const Text('新建页面'),
             )
           : null,
       bottomNavigationBar: showPage
@@ -2538,6 +2534,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
+    // 打开弹窗前先预热 WebView（幂等）：让用户输标题期间就把 SPA chunk 灌进缓存。
+    unawaited(NativeBrowser.prewarmWebView());
+
     final controller = TextEditingController();
     final title = await showDialog<String>(
       context: context,
@@ -2571,17 +2570,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (title == null || !mounted) return;
     final trimmedTitle = title.trim();
+    final pageTitle = trimmedTitle.isEmpty ? '无标题' : trimmedTitle;
 
-    setState(() => _creatingPage = true);
+    // 先打开内嵌浏览器进入「正在创建笔记…」加载态，创建放后台，
+    // 用户不再干等首页的「创建中」。
+    final browserOpened = await NativeBrowser.openCreatingPage(title: pageTitle);
+
+    unawaited(
+      _createPageInBackground(
+        sourceId: _sourceId,
+        titleProperty: titleProperty,
+        title: pageTitle,
+        browserOpened: browserOpened,
+      ),
+    );
+  }
+
+  /// 后台创建页面：成功后让已打开的内嵌浏览器导航过去，失败则通知其显示错误态。
+  Future<void> _createPageInBackground({
+    required String sourceId,
+    required String titleProperty,
+    required String title,
+    required bool browserOpened,
+  }) async {
     try {
       final response = await NotionClient.post('/pages', body: {
-        'parent': {'data_source_id': _sourceId},
+        'parent': {'data_source_id': sourceId},
         'properties': {
           titleProperty: {
             'title': [
               {
                 'type': 'text',
-                'text': {'content': trimmedTitle.isEmpty ? '无标题' : trimmedTitle},
+                'text': {'content': title},
               }
             ],
           },
@@ -2591,21 +2611,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final page = Map<String, dynamic>.from(data);
-      if (!mounted) return;
+      final pageId = page['id']?.toString() ?? '';
+      if (pageId.isEmpty) {
+        throw const FormatException('Notion 未返回页面 ID');
+      }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已创建：${_pageTitle(page)}')),
-      );
-      await _openPageInBrowser(page);
+      final resolvedTitle = _pageTitle(page);
+      unawaited(RecentPagesService.addRecentPage(pageId, resolvedTitle));
+
+      if (browserOpened) {
+        _pendingBrowserRefreshPageId = pageId;
+        await NativeBrowser.navigatePage(pageId: pageId, title: resolvedTitle);
+      } else {
+        // 浏览器没起来（非 Android 等）：退回「先创建再打开」的老路径。
+        await _openPageInBrowser(page);
+      }
       if (mounted) unawaited(_loadRows());
+      await AppLogger.log('Home', '创建页面成功: $pageId');
     } catch (error) {
       await AppLogger.log('Home', '创建页面失败: $error');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('创建页面失败：$error')),
-      );
-    } finally {
-      if (mounted) setState(() => _creatingPage = false);
+      if (browserOpened) {
+        await NativeBrowser.failPendingCreate(message: '创建失败：$error');
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('创建页面失败：$error')),
+        );
+      }
     }
   }
 
