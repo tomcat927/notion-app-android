@@ -70,6 +70,11 @@ class BrowserActivity : Activity() {
 
     override fun onDestroy() {
         writeBrowserLog("browser destroyed")
+        MemoryDiagnostics.snapshot(
+            this,
+            "browser_destroy",
+            extra = "webViewAlive=${BrowserWebViewHolder.hasLiveWebView()}",
+        )
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
         elementInspectorActive = false
@@ -744,6 +749,7 @@ class BrowserActivity : Activity() {
         }
         val url = "https://www.notion.so/$pageId"
         showPageLoading(pageId)
+        MemoryDiagnostics.snapshot(this, "browser_open", extra = "pageId=$pageId")
         writeBrowserLog(
             "open page: $pageId url=$url " +
                 "openExternalLinksInApp=$openExternalLinksInApp " +
@@ -1278,11 +1284,17 @@ class BrowserActivity : Activity() {
          * - `sync`：`syncRecordValue`（Notion 协同数据拉取）的条目数与耗时 P50/P95；
          * - `blocks`：`[data-block-id]` 数量，近似「已渲染 block 数」。
          *
-         * 每次调用会**清掉上一组未触发的定时器**再重排，故 onPageFinished 多次回调不会叠加。
+         * 同一 URL 的重复回调（onPageFinished 会多次触发）直接跳过，避免 t5s/t15s/t30s 被反复顺延；
+         * 仅在导航到新 URL 时清掉上一组未触发的定时器再重排。
          * 零副作用：只读 performance API / DOM，不修改页面。
          */
         private const val PERF_COLLECT_SCRIPT = """
 (() => {
+  // onPageFinished 对同一 URL 会重复回调（SPA 尤其频繁）。只有导航到新 URL 才重排采样，
+  // 否则 t5s/t15s/t30s 会被反复顺延，导致永远采不到 t30s。
+  const navKey = location.href;
+  if (window.__notionPerfNavKey === navKey) return;
+  window.__notionPerfNavKey = navKey;
   try {
     if (window.__notionPerfTimers) {
       window.__notionPerfTimers.forEach(clearTimeout);

@@ -49,6 +49,7 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         writeHistoricalProcessExits()
         startMainThreadWatchdog()
+        startMemoryDiagnostics()
         if (intent?.getBooleanExtra("install_update", false) == true) {
             Handler(Looper.getMainLooper()).postDelayed({ installPendingUpdate() }, 1500)
         }
@@ -59,6 +60,12 @@ class MainActivity : FlutterActivity() {
         // UI_HIDDEN 是每次退到后台的正常信号，交给生命周期日志；这里只记录内存压力。
         if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            // 先记录内存水位（此时 WebView 还没被回收），再按需回收。
+            MemoryDiagnostics.snapshot(
+                this,
+                "trimMemory",
+                extra = "level=$level webViewAlive=${BrowserWebViewHolder.hasLiveWebView()}",
+            )
             // 浏览器 WebView 未挂载时可直接回收，挂载中（用户正在看笔记）则保留。
             BrowserWebViewHolder.onMemoryPressure()
             writeNativeCrashLog(
@@ -99,6 +106,32 @@ class MainActivity : FlutterActivity() {
             mainThreadWatchRunnable,
             MAIN_THREAD_WATCH_INTERVAL_MS,
         )
+    }
+
+    /**
+     * 周期性记录内存水位（默认 120s 一条）。
+     *
+     * 崩溃/被杀是**外部**发生的（SIGKILL），App 抓不到现场；有周期采样后，
+     * 即使进程被杀，也能从最后几条看出被杀前内存是否在涨。
+     * 进程内只启动一次（用 companion 的 Handler），避免 Activity 重建导致重复。
+     */
+    private fun startMemoryDiagnostics() {
+        if (memoryDiagStarted) return
+        memoryDiagStarted = true
+        val appContext = applicationContext
+        val runnable = object : Runnable {
+            override fun run() {
+                MemoryDiagnostics.snapshot(
+                    appContext,
+                    "periodic",
+                    extra = "prewarm=$prewarmActive " +
+                        "webViewAlive=${BrowserWebViewHolder.hasLiveWebView()} " +
+                        "browserForeground=${BrowserWebViewHolder.currentActivity != null}",
+                )
+                memoryDiagHandler.postDelayed(this, MEMORY_DIAG_INTERVAL_MS)
+            }
+        }
+        memoryDiagHandler.postDelayed(runnable, MEMORY_DIAG_INTERVAL_MS)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -469,6 +502,8 @@ class MainActivity : FlutterActivity() {
         prewarmAttempt += 1
         val attempt = prewarmAttempt
         prewarmFirstFinishedAtMs = 0L
+        prewarmActive = true
+        writeNativeCrashLog(applicationContext, "source=prewarm\nstate=start attempt=$attempt")
         val webView = WebView(this)
         prewarmWebView = webView
         webView.settings.apply {
@@ -605,6 +640,8 @@ class MainActivity : FlutterActivity() {
         prewarmHandler.removeCallbacksAndMessages(null)
         prewarmWebView?.destroy()
         prewarmWebView = null
+        prewarmActive = false
+        writeNativeCrashLog(applicationContext, "source=prewarm\nstate=release reason=$reason")
         Log.i(prewarmTag, "released ($reason)")
     }
 
@@ -947,23 +984,34 @@ class MainActivity : FlutterActivity() {
         private const val NOTIFICATION_PERMISSION_REQUEST = 4102
         private const val MAIN_THREAD_WATCH_INTERVAL_MS = 5_000L
         private const val MAIN_THREAD_WATCH_DELAY_THRESHOLD_MS = 10_000L
+        private const val MEMORY_DIAG_INTERVAL_MS = 120_000L
+        private val memoryDiagHandler = Handler(Looper.getMainLooper())
         @Volatile
         private var crashHandlerInstalled = false
+
+        @Volatile
+        private var memoryDiagStarted = false
+
+        /** 预热 WebView 是否存活（供周期内存诊断标注）。 */
+        @Volatile
+        private var prewarmActive = false
 
         private fun nativeCrashLogFile(context: Context): File =
             File(context.filesDir, "notion_app_native_crash.log")
 
         private fun writeNativeCrashLog(context: Context, message: String) {
             try {
-                val file = nativeCrashLogFile(context)
-                if (file.length() > MAX_NATIVE_CRASH_LOG_BYTES) {
-                    file.writeText("")
+                synchronized(APP_DIAG_LOG_LOCK) {
+                    val file = nativeCrashLogFile(context)
+                    if (file.length() > MAX_NATIVE_CRASH_LOG_BYTES) {
+                        file.writeText("")
+                    }
+                    val timestamp = SimpleDateFormat(
+                        "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+                        Locale.US,
+                    ).format(Date())
+                    file.appendText("[$timestamp] [NativeCrash]\n$message\n\n")
                 }
-                val timestamp = SimpleDateFormat(
-                    "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-                    Locale.US,
-                ).format(Date())
-                file.appendText("[$timestamp] [NativeCrash]\n$message\n\n")
             } catch (ignored: Exception) {
                 // Never throw from crash logging.
             }

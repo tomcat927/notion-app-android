@@ -109,6 +109,9 @@ internal object BrowserWebViewHolder {
         mainHandler.removeCallbacks(idleReleaseRunnable)
     }
 
+    /** 是否仍有常驻 WebView（用于内存诊断：常驻 WebView 是主要内存占用）。 */
+    internal fun hasLiveWebView(): Boolean = webView != null
+
     /** 系统内存压力回调（来自 MainActivity.onTrimMemory）：只回收未挂载的 WebView。 */
     internal fun onMemoryPressure() {
         if (currentActivity != null) return
@@ -123,13 +126,15 @@ internal object BrowserWebViewHolder {
         logExecutor.execute {
             val context = appContext ?: return@execute
             try {
-                val file = File(context.filesDir, "notion_app_native_crash.log")
-                if (file.length() > MAX_BROWSER_LOG_BYTES) {
-                    val content = file.readText()
-                    file.writeText(content.substring(content.length / 2))
+                synchronized(APP_DIAG_LOG_LOCK) {
+                    val file = File(context.filesDir, "notion_app_native_crash.log")
+                    if (file.length() > MAX_BROWSER_LOG_BYTES) {
+                        val content = file.readText()
+                        file.writeText(content.substring(content.length / 2))
+                    }
+                    val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())
+                    file.appendText("[$timestamp] [BrowserWebView]\n$message\n\n")
                 }
-                val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())
-                file.appendText("[$timestamp] [BrowserWebView]\n$message\n\n")
             } catch (ignored: Exception) {
                 // Never fail because of diagnostics.
             }
@@ -239,6 +244,9 @@ internal object BrowserWebViewHolder {
                 false
             }
             writeBrowserLog("WebView renderer gone: didCrash=$didCrash priorityAtExit=${rendererPriority(detail)}")
+            appContext?.let {
+                MemoryDiagnostics.snapshot(it, "renderer_gone", extra = "didCrash=$didCrash")
+            }
             destroyWebView(clearPage = false)
             val activity = currentActivity ?: return true
             if (tryBeginRendererRecovery()) {
