@@ -441,8 +441,8 @@ class BrowserActivity : Activity() {
         view.evaluateJavascript(HIDE_NOTION_FLOATERS_SCRIPT, null)
         view.evaluateJavascript(INSTALL_OUTLINE_SCRIPT, null)
         view.evaluateJavascript(HIGHLIGHT_STYLE_SCRIPT, null)
-        // 页面加载性能瀑布采集（延迟 5s 采样，结果经 console 回写原生日志）
-        view.evaluateJavascript("window.__notionPerfCollected = false;", null)
+        // 页面加载性能瀑布采集（5s/15s/30s 多次采样，结果经 console 回写原生日志）。
+        // 脚本自带「清掉上一组未触发的采样定时器」逻辑，故 onPageFinished 多次回调不会叠加。
         view.evaluateJavascript(PERF_COLLECT_SCRIPT, null)
         BrowserWebViewHolder.injectImageClickScript(view)
         if (highlightBlockId.isNotEmpty()) {
@@ -1264,25 +1264,46 @@ class BrowserActivity : Activity() {
 """
 
         /**
-         * 页面加载性能瀑布采集。
+         * 页面加载性能瀑布采集（增强版）。
          *
-         * 在页面稳定后（onPageFinished 后延迟 5s）读取 Performance Resource Timing，
+         * 在 `onPageFinished` 后按 **5s / 15s / 30s** 多次采样 Performance Resource Timing，
          * 汇总每个域名的请求数 / 总字节 / 总耗时，并把最慢的 10 个资源打印到 console，
          * 由 onConsoleMessage 识别 `NOTION_PERF:` 前缀后写入原生日志。
          *
-         * 目的：定位「哪个域名 / 哪个资源最拖慢加载」，用于指导 Clash 分流与缓存优化。
-         * 零副作用：只读 performance API，不改 DOM。
+         * 相比旧版（只采 5s 一次）新增：
+         * - `phase`：采样阶段（t5s / t15s / t30s），用于区分「首屏」与「懒加载补齐」；
+         * - `pending`：已插入 DOM 但尚未完成的 script/stylesheet 数（不含懒加载 img）——
+         *   `getEntriesByType('resource')` **不含在飞请求**，此字段用于判断是否仍在加载，
+         *   也为「预热释放判据」的假静默问题取证；
+         * - `sync`：`syncRecordValue`（Notion 协同数据拉取）的条目数与耗时 P50/P95；
+         * - `blocks`：`[data-block-id]` 数量，近似「已渲染 block 数」。
+         *
+         * 每次调用会**清掉上一组未触发的定时器**再重排，故 onPageFinished 多次回调不会叠加。
+         * 零副作用：只读 performance API / DOM，不修改页面。
          */
         private const val PERF_COLLECT_SCRIPT = """
 (() => {
-  if (window.__notionPerfCollected) return;
-  window.__notionPerfCollected = true;
+  try {
+    if (window.__notionPerfTimers) {
+      window.__notionPerfTimers.forEach(clearTimeout);
+    }
+  } catch (e) {}
+  window.__notionPerfTimers = [];
 
   const emit = (payload) => {
     try { console.log('NOTION_PERF:' + JSON.stringify(payload)); } catch (e) {}
   };
 
-  const run = () => {
+  const percentile = (sortedAsc, p) => {
+    if (!sortedAsc.length) return 0;
+    const idx = Math.min(
+      sortedAsc.length - 1,
+      Math.max(0, Math.ceil((p / 100) * sortedAsc.length) - 1)
+    );
+    return Math.round(sortedAsc[idx]);
+  };
+
+  const run = (phase) => {
     try {
       const entries = performance.getEntriesByType('resource') || [];
       const nav = performance.getEntriesByType('navigation')[0] || {};
@@ -1326,15 +1347,46 @@ class BrowserActivity : Activity() {
           };
         });
 
+      // 在飞请求：resource timing 只含已完成项，这里用 DOM 元素近似「还没加载完」。
+      // 只统计会阻塞 SPA 的 script/stylesheet —— img 多为懒加载，未进视口会长期
+      // !complete 造成误报；口径与预热释放判据保持一致。
+      let pending = 0;
+      try {
+        document.querySelectorAll('script[src], link[rel="stylesheet"][href]')
+          .forEach((el) => {
+            const src = el.src || el.href || '';
+            if (src && performance.getEntriesByName(src).length === 0) pending += 1;
+          });
+      } catch (e) {}
+
+      // Notion 协同数据拉取（syncRecordValue）分布
+      let syncCount = 0;
+      const syncDurations = [];
+      entries.forEach((e) => {
+        if (e.name && e.name.indexOf('syncRecordValue') >= 0) {
+          syncCount += 1;
+          if (e.duration > 0) syncDurations.push(e.duration);
+        }
+      });
+      syncDurations.sort((a, b) => a - b);
+
+      // 已渲染 block 近似值
+      let blocks = 0;
+      try { blocks = document.querySelectorAll('[data-block-id]').length; } catch (e) {}
+
       emit({
+        phase: phase,
         nav: {
           domContentLoaded: Math.round(nav.domContentLoadedEventEnd || 0),
           loadComplete: Math.round(nav.loadEventEnd || 0),
           ttfb: Math.round(nav.responseStart || 0)
         },
         resourceCount: entries.length,
+        pending: pending,
         totalKB: Math.round(totalBytes / 1024),
         totalMs: Math.round(totalDuration),
+        sync: { count: syncCount, p50: percentile(syncDurations, 50), p95: percentile(syncDurations, 95) },
+        blocks: blocks,
         domains: domainList.map((d) => ({
           host: d.host,
           n: d.count,
@@ -1344,12 +1396,16 @@ class BrowserActivity : Activity() {
         slowest: slowest
       });
     } catch (err) {
-      emit({ error: String(err) });
+      emit({ phase: phase, error: String(err) });
     }
   };
 
-  // 等 5s 让懒加载资源也进来，再采样一次
-  setTimeout(run, 5000);
+  // 多次采样：懒加载 chunk 在 onPageFinished 之后才陆续进来，分阶段观察
+  [5000, 15000, 30000].forEach((delay) => {
+    window.__notionPerfTimers.push(
+      setTimeout(() => run('t' + Math.round(delay / 1000) + 's'), delay)
+    );
+  });
 })();
 """
     }

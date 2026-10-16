@@ -442,12 +442,14 @@ class MainActivity : FlutterActivity() {
      *
      * 120s 曾不够：实测慢链路一轮在 120s 到点时资源数仍在以约 5 个/秒的速度增长
      * （648 个），被硬掐断后只灌进 592 条；按增速推算要 ~175s 才能到 ~920。
-     * 故放宽到 240s。
+     * 240s 仍偏紧：更慢的窗口实测在 240s 到点仍 `resources=648` 在涨（覆盖率只有 ~592）。
+     * 故放宽到 480s —— 只影响慢链路（快链路会被「静默释放」在 20–30s 提前结束），
+     * 配合新的 pending 判据，正常路径不会因此变慢。
      *
      * 放宽的代价可控：预热下载的就是笔记打开时本来也要下载的那批 chunk（同一批资源），
      * 只是提前下载；且用户一旦打开笔记会立即释放预热（见 openPageBrowser），不会抢带宽。
      */
-    private val prewarmMaxLifetimeMs = 240_000L
+    private val prewarmMaxLifetimeMs = 480_000L
 
     /**
      * 预热失败（主文档加载出错）时的重试次数与间隔。
@@ -472,7 +474,9 @@ class MainActivity : FlutterActivity() {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+            // 与 BrowserWebViewHolder 保持一致：LOAD_DEFAULT。若预热自身吃到陈旧的
+            // no-cache HTML，会去拉一批已下线的旧 chunk，等于白预热。
+            cacheMode = WebSettings.LOAD_DEFAULT
             // 必须与 BrowserWebViewHolder.MOBILE_USER_AGENT 完全一致：
             // 若响应带 Vary: User-Agent，UA 不一致会让预热灌的缓存命中不到。
             userAgentString = "Mozilla/5.0 (Linux; Android 10; K) " +
@@ -518,10 +522,13 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * 轮询 SPA 的「已完成资源数」，连续 N 次不再增长就释放预热 WebView。
+     * 轮询 SPA 的「已完成资源数 + 在飞 script/stylesheet 数」，连续 N 次既无新增、
+     * 又没有在飞请求，才释放预热 WebView。
      *
-     * `performance.getEntriesByType('resource')` 只统计**已完成**的资源，
-     * 所以它的长度不再变化 == 页面已经没有在飞的请求了 —— 这正是我们要的释放时机。
+     * `performance.getEntriesByType('resource')` 只统计**已完成**的资源，长度不变
+     * 通常意味着没有在飞的请求；但慢链路上单个请求可能 >9s，这期间计数不增长，
+     * 单看它会被误判为「整页静默」（假静默隐患，见 docs §7.6·D）。故叠加 DOM 层的
+     * 在飞 script/stylesheet 计数作为第二判据。
      */
     private fun postPrewarmPoll(
         view: WebView,
@@ -538,18 +545,31 @@ class MainActivity : FlutterActivity() {
                     Log.i(prewarmTag, "attempt $attempt poll chain=$token superseded")
                     return@postDelayed
                 }
+                // 同时返回「已完成资源数」与「在飞的 script/stylesheet 数」。
+                // 只看已完成数会在慢链路上被骗：单个 >9s 的在飞请求期间计数不增长，
+                // 会被误判为「整页静默」而提前释放（见 docs §7.6·D 的假静默隐患）。
                 val script = "(function(){try{" +
-                    "return performance.getEntriesByType('resource').length;" +
-                    "}catch(e){return -1}})()"
+                    "var c=performance.getEntriesByType('resource').length;" +
+                    "var p=0;" +
+                    "try{document.querySelectorAll('script[src],link[rel=stylesheet][href]')" +
+                    ".forEach(function(el){var s=el.src||el.href||'';" +
+                    "if(s&&performance.getEntriesByName(s).length===0)p++;});}catch(e){p=-1;}" +
+                    "return c+'|'+p;}catch(e){return '-1|-1'}})()"
                 view.evaluateJavascript(script) { raw ->
                     if (prewarmWebView !== view) return@evaluateJavascript
                     if (token != prewarmPollToken) return@evaluateJavascript
-                    val count = raw?.trim()?.trim('"')?.toIntOrNull() ?: -1
-                    val nextIdle = if (count > 0 && count == lastCount) idlePolls + 1 else 0
+                    val parts = (raw?.trim()?.trim('"') ?: "").split("|")
+                    val count = parts.getOrNull(0)?.toIntOrNull() ?: -1
+                    val pending = parts.getOrNull(1)?.toIntOrNull() ?: -1
+                    // pending 取不到（-1）时退回旧口径，避免被误判成「永不静默」。
+                    val noPending = pending <= 0
+                    val nextIdle =
+                        if (count > 0 && count == lastCount && noPending) idlePolls + 1 else 0
                     val nextLast = if (count > 0) count else lastCount
                     Log.i(
                         prewarmTag,
-                        "attempt $attempt chain=$token resources=$count idle=${nextIdle}x",
+                        "attempt $attempt chain=$token resources=$count " +
+                            "pending=$pending idle=${nextIdle}x",
                     )
                     val settled =
                         SystemClock.elapsedRealtime() - prewarmFirstFinishedAtMs >= prewarmMinSettleMs

@@ -20,6 +20,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.webkit.WebViewCompat
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.text.SimpleDateFormat
@@ -151,11 +152,29 @@ internal object BrowserWebViewHolder {
             builtInZoomControls = true
             displayZoomControls = false
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+            // LOAD_DEFAULT：尊重 HTTP 缓存与 Cache-Control。app.notion.com 的 HTML 是
+            // `Cache-Control: no-cache`，必须回源校验；旧值 LOAD_CACHE_ELSE_NETWORK 会
+            // 忽略 no-cache 直接吃缓存，可能加载到旧版 SPA 外壳。内容哈希命名的 chunk
+            // 带长缓存，照常命中，不受影响。
+            cacheMode = WebSettings.LOAD_DEFAULT
             userAgentString = MOBILE_USER_AGENT
         }
         view.addJavascriptInterface(ElementInspectorBridge(), "NotionElementInspector")
         view.addJavascriptInterface(InPageSearchBridge(), "NotionInPageSearchNative")
+        // 提升渲染进程优先级，降低内存紧张时被系统回收的概率（回收会白屏重载）。
+        // waivedWhenNotVisible=true：可见时保持重要优先级，退到后台（未挂载）则让位，
+        // 避免常驻 WebView 长期占内存。API 26 起有效，低版本静默跳过。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                WebViewCompat.setRendererPriorityPolicy(
+                    view,
+                    WebViewCompat.RENDERER_PRIORITY_IMPORTANT,
+                    true,
+                )
+            } catch (_: Exception) {
+                // 尽力而为，失败不影响加载。
+            }
+        }
         val box = ImageLightbox { currentActivity }
         lightbox = box
         box.install(view)
@@ -361,6 +380,14 @@ internal object BrowserWebViewHolder {
         "splunkcloud.com",
         // 实验下发（属 notion.com 后缀，默认走代理反而更慢）
         "exp.notion.com",
+        // Notion AI 面板 iframe：日志实测 `aif-production.html` 传输 0 字节却卡
+        // 154s / 169s / 292s（docs 日志页 perf 采样）。本 App 明确移除 AI
+        // （见 docs/REQUIREMENTS.md），拦掉可消除这段纯等待。
+        "aif.notion.so",
+        // 第三方：错误上报 / 营销与站内消息 / 客服消息（实测各 0.5–1.4s）
+        "ingest.sentry.io",
+        "customer.io",
+        "gist.build",
     )
 
     /** 判定 URL 是否应被短路。抽成函数便于单测与集中维护。 */
